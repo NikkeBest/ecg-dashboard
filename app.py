@@ -41,20 +41,37 @@ def normalize_beat(beat: np.ndarray) -> np.ndarray:
     return (beat - float(beat.mean())) / (float(beat.std()) + 1e-8)
 
 
+
 def _read_header_frequency(header_path: Path) -> float:
-    """Read WFDB's base sampling frequency, including optional counter suffixes."""
+    """Read the sampling frequency from a WFDB .hea header."""
     try:
-        first_line = header_path.read_text(encoding="ascii", errors="replace").splitlines()[0]
-        fields = first_line.split()
+        lines = header_path.read_text(
+            encoding="ascii", errors="replace"
+        ).splitlines()
+
+        if not lines:
+            raise ValueError("The header file is empty.")
+
+        fields = lines[0].strip().split()
+
         if len(fields) < 3:
-            raise ValueError("The WFDB header's first line is incomplete.")
-        # WFDB may write e.g. '360/1000' or '360 0 1000'; use only the rate.
-        fs = float(fields[2].split("/")[0])
+            raise ValueError(
+                f"Invalid WFDB header first line: {lines[0]!r}"
+            )
+
+        fs_text = fields[2].split("/")[0]
+        fs = float(fs_text)
+
+        if not math.isfinite(fs) or fs <= 0:
+            raise ValueError("Sampling frequency must be positive.")
+
+        return fs
+
     except (OSError, IndexError, ValueError) as exc:
-        raise ValueError(f"Could not read a valid sampling frequency from {header_path.name}.") from exc
-    if not math.isfinite(fs) or fs <= 0:
-        raise ValueError("The WFDB header contains an invalid sampling frequency.")
-    return fs
+        raise ValueError(
+            f"Cannot read sampling frequency from "
+            f"{header_path.name}: {exc}"
+        ) from exc
 
 
 def _save_uploads(uploaded_files, target_dir: Path) -> list[Path]:
