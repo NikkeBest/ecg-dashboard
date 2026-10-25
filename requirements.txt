@@ -1,5 +1,7 @@
-streamlit
+streamlit>=1.36
 numpy
 pandas
 plotly
-tensorflow
+tensorflow>=2.16,<2.20
+wfdb>=4.1
+scipy
