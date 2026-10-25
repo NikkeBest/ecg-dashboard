@@ -1,8 +1,18 @@
-
 import streamlit as st
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import tensorflow as tf
+
+@st.cache_resource
+def load_model():
+    return tf.keras.models.load_model(
+        "heartbeat_cnn.keras",
+        compile=False
+    )
+
+# Load the trained CNN model
+model = load_model()
 
 # -----------------------------
 # 1. PAGE CONFIGURATION
