@@ -23,11 +23,11 @@ TRAINING_FS = 360
 BEAT_PRE_SAMPLES = 90
 BEAT_LENGTH = 187
 CLASS_NAMES = {
-    0: "N — Normal",
-    1: "S — Supraventricular ectopic",
-    2: "V — Ventricular ectopic",
-    3: "F — Fusion",
-    4: "Q — Unknown / paced",
+    0: "N",
+    1: "S",
+    2: "V",
+    3: "F",
+    4: "Q",
 }
 
 
@@ -38,7 +38,7 @@ def load_model(model_path: str):
 
 def normalize_beat(beat: np.ndarray) -> np.ndarray:
     beat = np.asarray(beat, dtype=np.float32)
-    return (beat - float(beat.mean())) / (float(beat.std()) + 1e-8)
+    return (beat - beat.mean()) / (beat.std() + 1e-8)
 
 
 def _read_header_frequency(header_path: Path) -> float:
@@ -129,8 +129,8 @@ def detect_r_peaks(signal: np.ndarray, fs: int) -> tuple[np.ndarray, str]:
     return peaks.astype(int), "SciPy fallback (approximate)"
 
 
-def prepare_record(header_path: Path, channel: int = 0):
-    """Read a WFDB record, validate it, resample and create model-ready beats."""
+def prepare_record(header_path: Path):
+    """Read the first lead, resample if needed, and create model-ready beats."""
     if header_path.suffix.lower() != ".hea" or not header_path.is_file():
         raise ValueError("Select a WFDB .hea header file.")
     header_fs = _read_header_frequency(header_path)
@@ -141,46 +141,55 @@ def prepare_record(header_path: Path, channel: int = 0):
             f"Could not load {header_path.name}. Include the matching signal file(s) "
             "(.dat, .mat, or the format named in the header) with the .hea file."
         ) from exc
-    if record.p_signal is None or record.p_signal.size == 0:
-        raise ValueError("The record has no readable signal data.")
+    if record.p_signal is None or record.p_signal.size == 0 or record.p_signal.shape[1] == 0:
+        raise ValueError("The record has no readable ECG signal data.")
+
     original_fs = float(record.fs)
     if not math.isfinite(original_fs) or original_fs <= 0:
         original_fs = header_fs
     if not math.isclose(original_fs, header_fs, rel_tol=0, abs_tol=1e-6):
         raise ValueError("The sampling frequency parsed from the header does not match WFDB.")
-    if channel < 0 or channel >= record.p_signal.shape[1]:
-        raise ValueError("The selected ECG channel does not exist in this record.")
-    signal = np.asarray(record.p_signal[:, channel], dtype=np.float64)
+
+    # Training used the first signal lead, regardless of other available leads.
+    lead_name = record.sig_name[0] if record.sig_name else "Lead 0"
+    signal = np.asarray(record.p_signal[:, 0], dtype=np.float64)
     if not np.isfinite(signal).any():
-        raise ValueError("The selected ECG channel contains no finite samples.")
+        raise ValueError("The first ECG lead contains no finite samples.")
     signal = np.nan_to_num(signal, nan=0.0, posinf=0.0, neginf=0.0)
+
+    # Detect peaks only after any resampling so their indices use 360 Hz coordinates.
     if not math.isclose(original_fs, TRAINING_FS, rel_tol=0, abs_tol=1e-6):
         ratio = Fraction(TRAINING_FS / original_fs).limit_denominator(10000)
         signal = resample_poly(signal, ratio.numerator, ratio.denominator)
     peaks, detector_name = detect_r_peaks(signal, TRAINING_FS)
+
     beats, valid_peaks = [], []
     for peak in peaks:
         start = int(peak) - BEAT_PRE_SAMPLES
-        end = start + BEAT_LENGTH
+        end = start + BEAT_LENGTH  # exclusive: includes peak + 96 as the last sample
         if start >= 0 and end <= len(signal):
             beats.append(normalize_beat(signal[start:end]))
             valid_peaks.append(int(peak))
     if not beats:
         raise ValueError("No complete 187-sample heartbeat windows could be extracted.")
     model_input = np.asarray(beats, dtype=np.float32)[..., np.newaxis]
-    return record, signal, np.asarray(valid_peaks), model_input, detector_name, original_fs
+    return (
+        record, signal, np.asarray(valid_peaks), model_input,
+        detector_name, original_fs, lead_name,
+    )
 
 
 def main() -> None:
     st.set_page_config(page_title="ECG Heartbeat Classification", page_icon="💓", layout="wide")
     st.title("💓 ECG Heartbeat Classification")
     st.write(
-        "Upload a WFDB ECG record and classify detected heartbeat windows with the trained CNN. "
-        "Upload the `.hea` header and every signal file named by that header, or upload a ZIP bundle."
+        "Upload a WFDB ECG record and classify automatically detected heartbeat windows with the trained CNN. "
+        "Upload the .hea header and every signal file named by that header, or upload a ZIP bundle."
     )
     st.warning(
-        "Research/student prototype only — not a medical diagnosis. R-peak detection may miss or "
-        "misplace beats, especially on noisy or unfamiliar recordings."
+        "Research/student prototype only — not clinically validated and not a medical diagnosis. "
+        "R-peaks are detected automatically; they may differ from the annotated beat positions used "
+        "during training, which can affect classification accuracy. An .atr file is not required."
     )
 
     if not MODEL_PATH.is_file():
@@ -192,6 +201,16 @@ def main() -> None:
         st.error(f"Could not load {MODEL_PATH.name}: {exc}")
         st.stop()
 
+    output_shape = model.output_shape
+    if isinstance(output_shape, list):
+        if len(output_shape) != 1:
+            st.error("The model must have one output with five classes.")
+            st.stop()
+        output_shape = output_shape[0]
+    if not output_shape or output_shape[-1] != 5:
+        st.error(f"Expected a five-class model output; model output shape is {output_shape}.")
+        st.stop()
+
     uploaded_files = st.file_uploader(
         "WFDB files (.hea and matching signal file), or a ZIP bundle",
         type=["hea", "dat", "mat", "atr", "xyz", "zip"],
@@ -201,66 +220,84 @@ def main() -> None:
         st.info("Choose a WFDB header and its corresponding signal file(s) to begin.")
         return
 
-    # Streamlit reruns this script after widget changes. Persist uploads in a
-    # per-session folder so the selector never points to a deleted temp folder.
+    # Keep uploaded files stable across Streamlit reruns caused by widget changes.
     if "ecg_upload_dir" not in st.session_state:
         st.session_state.ecg_upload_dir = tempfile.mkdtemp(prefix="ecg_upload_")
     root = Path(st.session_state.ecg_upload_dir)
     root.mkdir(parents=True, exist_ok=True)
     try:
-            saved = _save_uploads(uploaded_files, root)
-            headers = _find_header_files(saved, root)
-            if not headers:
-                raise ValueError("No .hea file was found. Upload it with its signal file, or use a ZIP bundle.")
-            selected_header = st.selectbox("Choose ECG record", headers, format_func=lambda p: p.name)
-            channels = None
-            try:
-                header_fs = _read_header_frequency(selected_header)
-                record_for_channels = wfdb.rdrecord(str(selected_header.with_suffix("")), physical=True)
-                channel_names = list(record_for_channels.sig_name or [])
-                channel_count = len(channel_names) or record_for_channels.n_sig
-                labels = [f"{i}: {channel_names[i] if i < len(channel_names) else f'Channel {i}'}" for i in range(channel_count)]
-                channels = st.selectbox("ECG channel", range(channel_count), format_func=lambda i: labels[i])
-            except Exception as exc:
-                st.error(f"Unable to read the selected WFDB record: {exc}")
-                return
-            if st.button("Analyze recording", type="primary"):
-                with st.spinner("Detecting beats and running the model…"):
-                    record, signal, peaks, X_input, detector, original_fs = prepare_record(selected_header, channels)
-                    predictions = np.asarray(model.predict(X_input, verbose=0))
-                if predictions.ndim != 2 or predictions.shape[0] != len(X_input):
-                    raise ValueError("The model returned an unexpected output shape.")
-                if predictions.shape[1] != 5:
-                    raise ValueError(f"Expected a five-class model output; received {predictions.shape[1]} classes.")
-                class_ids = predictions.argmax(axis=1)
-                results = pd.DataFrame({
-                    "Beat": np.arange(1, len(class_ids) + 1),
-                    "Time (s)": peaks / TRAINING_FS,
-                    "Class": [CLASS_NAMES[int(i)] for i in class_ids],
-                    "Confidence": predictions.max(axis=1),
-                })
-                st.success(f"Analyzed {len(results)} complete beats using {detector}.")
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Record sampling rate", f"{original_fs:g} Hz")
-                c2.metric("Model sampling rate", f"{TRAINING_FS} Hz")
-                c3.metric("Detected beats", f"{len(results)}")
-                counts = results["Class"].value_counts().rename_axis("Class").reset_index(name="Beats")
-                st.subheader("Classification summary")
-                st.plotly_chart(px.bar(counts, x="Class", y="Beats", color="Class"), width="stretch")
-                st.subheader("Detected ECG signal")
-                plot_limit = min(len(signal), TRAINING_FS * 30)
-                signal_frame = pd.DataFrame({"Time (s)": np.arange(plot_limit) / TRAINING_FS, "Amplitude": signal[:plot_limit]})
-                st.plotly_chart(px.line(signal_frame, x="Time (s)", y="Amplitude"), width="stretch")
-                st.subheader("Beat predictions")
-                st.dataframe(results, width="stretch", hide_index=True)
-                st.download_button(
-                    "Download predictions (CSV)",
-                    results.to_csv(index=False).encode("utf-8"),
-                    file_name=f"{selected_header.stem}_predictions.csv",
-                    mime="text/csv",
-                )
+        # Rebuild the temporary session folder to avoid stale records from earlier uploads.
+        for child in root.iterdir():
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+
+        saved = _save_uploads(uploaded_files, root)
+        headers = _find_header_files(saved, root)
+        if not headers:
+            raise ValueError("No .hea file was found. Upload it with its signal file, or use a ZIP bundle.")
+
+        header_options = [p.relative_to(root).as_posix() for p in headers]
+        selected_name = st.selectbox("Choose ECG record", header_options)
+        selected_header = root.joinpath(*Path(selected_name).parts)
+        try:
+            record_for_lead = wfdb.rdrecord(str(selected_header.with_suffix("")), physical=True)
+            lead_name = record_for_lead.sig_name[0] if record_for_lead.sig_name else "Lead 0"
+            st.caption(f"Lead used for inference: {lead_name} (first ECG lead)")
+        except Exception as exc:
+            st.error(
+                "Unable to read the selected WFDB record. Check that the .hea file and its matching "
+                f"signal file are uploaded. Details: {exc}"
+            )
+            return
+
+        if st.button("Analyze recording", type="primary"):
+            with st.spinner("Detecting beats and running the model…"):
+                record, signal, peaks, X_input, detector, original_fs, lead_name = prepare_record(selected_header)
+                predictions = np.asarray(model.predict(X_input, verbose=0))
+
+            if predictions.ndim != 2 or predictions.shape[0] != len(X_input):
+                raise ValueError("The model returned an unexpected output shape.")
+            if predictions.shape[1] != 5:
+                raise ValueError(f"Expected a five-class model output; received {predictions.shape[1]} classes.")
+
+            class_ids = predictions.argmax(axis=1)
+            results = pd.DataFrame({
+                "Beat": np.arange(1, len(class_ids) + 1),
+                "Time (s)": peaks / TRAINING_FS,
+                "Class": [CLASS_NAMES[int(i)] for i in class_ids],
+                "Confidence": predictions.max(axis=1),
+            })
+            st.success(f"Analyzed {len(results)} complete beats using {detector}.")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("First lead", lead_name)
+            c2.metric("Record sampling rate", f"{original_fs:g} Hz")
+            c3.metric("Detected beats", f"{len(results)}")
+
+            counts = results["Class"].value_counts().rename_axis("Class").reset_index(name="Beats")
+            st.subheader("Classification summary")
+            st.plotly_chart(px.bar(counts, x="Class", y="Beats", color="Class"), width="stretch")
+
+            st.subheader(f"Detected ECG signal — {lead_name}")
+            plot_limit = min(len(signal), TRAINING_FS * 30)
+            signal_frame = pd.DataFrame({
+                "Time (s)": np.arange(plot_limit) / TRAINING_FS,
+                "Amplitude": signal[:plot_limit],
+            })
+            st.plotly_chart(px.line(signal_frame, x="Time (s)", y="Amplitude"), width="stretch")
+
+            st.subheader("Beat predictions")
+            st.dataframe(results, width="stretch", hide_index=True)
+            st.download_button(
+                "Download predictions (CSV)",
+                results.to_csv(index=False).encode("utf-8"),
+                file_name=f"{selected_header.stem}_predictions.csv",
+                mime="text/csv",
+            )
     except Exception as exc:
         st.error(str(exc))
+
 
 
 if __name__ == "__main__":
