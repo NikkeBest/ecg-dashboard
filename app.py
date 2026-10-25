@@ -16,6 +16,12 @@ import math
 import wfdb
 from scipy.signal import butter, sosfiltfilt, find_peaks, resample_poly
 
+st.set_page_config(
+    page_title="ECG Monitor",
+    page_icon="💓",
+    layout="wide"
+)
+
 @st.cache_resource
 def load_model(model_path: str):
     return tf.keras.models.load_model(model_path, compile=False)
