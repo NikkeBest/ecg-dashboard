@@ -4,6 +4,15 @@ import pandas as pd
 import plotly.graph_objects as go
 import tensorflow as tf
 
+# 1. Configure the page first
+st.set_page_config(
+    page_title="ECG Monitor",
+    page_icon="💓",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# 1.2 Load the trained model
 @st.cache_resource
 def load_model():
     return tf.keras.models.load_model(
@@ -11,18 +20,7 @@ def load_model():
         compile=False
     )
 
-# Load the trained CNN model
 model = load_model()
-
-# -----------------------------
-# 1. PAGE CONFIGURATION
-# -----------------------------
-st.set_page_config(
-    page_title="ECG Monitor",
-    page_icon="💓",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
 
 # -----------------------------
 # 2. MEDICAL DASHBOARD STYLING
