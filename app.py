@@ -41,37 +41,20 @@ def normalize_beat(beat: np.ndarray) -> np.ndarray:
     return (beat - float(beat.mean())) / (float(beat.std()) + 1e-8)
 
 
-
 def _read_header_frequency(header_path: Path) -> float:
-    """Read the sampling frequency from a WFDB .hea header."""
+    """Read WFDB's base sampling frequency, including optional counter suffixes."""
     try:
-        lines = header_path.read_text(
-            encoding="ascii", errors="replace"
-        ).splitlines()
-
-        if not lines:
-            raise ValueError("The header file is empty.")
-
-        fields = lines[0].strip().split()
-
+        first_line = header_path.read_text(encoding="ascii", errors="replace").splitlines()[0]
+        fields = first_line.split()
         if len(fields) < 3:
-            raise ValueError(
-                f"Invalid WFDB header first line: {lines[0]!r}"
-            )
-
-        fs_text = fields[2].split("/")[0]
-        fs = float(fs_text)
-
-        if not math.isfinite(fs) or fs <= 0:
-            raise ValueError("Sampling frequency must be positive.")
-
-        return fs
-
+            raise ValueError("The WFDB header's first line is incomplete.")
+        # WFDB may write e.g. '360/1000' or '360 0 1000'; use only the rate.
+        fs = float(fields[2].split("/")[0])
     except (OSError, IndexError, ValueError) as exc:
-        raise ValueError(
-            f"Cannot read sampling frequency from "
-            f"{header_path.name}: {exc}"
-        ) from exc
+        raise ValueError(f"Could not read a valid sampling frequency from {header_path.name}.") from exc
+    if not math.isfinite(fs) or fs <= 0:
+        raise ValueError("The WFDB header contains an invalid sampling frequency.")
+    return fs
 
 
 def _save_uploads(uploaded_files, target_dir: Path) -> list[Path]:
@@ -218,9 +201,13 @@ def main() -> None:
         st.info("Choose a WFDB header and its corresponding signal file(s) to begin.")
         return
 
-    with tempfile.TemporaryDirectory(prefix="ecg_upload_") as temp_name:
-        root = Path(temp_name)
-        try:
+    # Streamlit reruns this script after widget changes. Persist uploads in a
+    # per-session folder so the selector never points to a deleted temp folder.
+    if "ecg_upload_dir" not in st.session_state:
+        st.session_state.ecg_upload_dir = tempfile.mkdtemp(prefix="ecg_upload_")
+    root = Path(st.session_state.ecg_upload_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    try:
             saved = _save_uploads(uploaded_files, root)
             headers = _find_header_files(saved, root)
             if not headers:
@@ -272,8 +259,8 @@ def main() -> None:
                     file_name=f"{selected_header.stem}_predictions.csv",
                     mime="text/csv",
                 )
-        except Exception as exc:
-            st.error(str(exc))
+    except Exception as exc:
+        st.error(str(exc))
 
 
 if __name__ == "__main__":
