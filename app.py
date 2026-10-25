@@ -146,15 +146,117 @@ run_prediction = st.button(
 )
 
 if run_prediction:
-    with st.spinner("Reading ECG, detecting heartbeats and running the CNN..."):
+    with st.spinner("Reading ECG and running prediction..."):
         try:
             with TemporaryDirectory() as temp_dir:
                 temp_path = Path(temp_dir)
 
+                # Save all uploaded files using their original filenames
                 for uploaded in uploaded_files:
-                    # Preserve filenames because the .hea header references them.
-                    (temp_path / Path(uploaded.name).name).write_bytes(uploaded.getvalue())
+                    file_path = temp_path / Path(uploaded.name).name
+                    file_path.write_bytes(uploaded.getvalue())
 
                 record_base = temp_path / Path(selected_hea.name).stem
-                if not record_base.with_suffix(".hea").exists():
-                    raise FileNotFoundError("The selected .hea file was not saved correctly.")
+                header_path = Path(str(record_base) + ".hea")
+
+                if not header_path.exists():
+                    raise FileNotFoundError(
+                        "The selected .hea file was not saved correctly."
+                    )
+
+                # Verify the signal files referenced by the header
+                header_lines = [
+                    line.strip()
+                    for line in header_path.read_text(
+                        errors="replace"
+                    ).splitlines()
+                    if line.strip()
+                ]
+
+                if not header_lines:
+                    raise ValueError("The .hea file is empty.")
+
+                header_parts = header_lines[0].split()
+                if len(header_parts) < 2:
+                    raise ValueError("Invalid WFDB header format.")
+
+                num_signals = int(header_parts[1])
+                missing_files = []
+
+                for line in header_lines[1:1 + num_signals]:
+                    parts = line.split()
+                    if not parts:
+                        continue
+
+                    referenced_file = parts[0]
+                    expected_path = temp_path / referenced_file
+
+                    if not expected_path.exists():
+                        expected_path = (
+                            temp_path / Path(referenced_file).name
+                        )
+
+                    if not expected_path.exists():
+                        missing_files.append(referenced_file)
+
+                if missing_files:
+                    raise FileNotFoundError(
+                        "Please upload the signal file(s) referenced by "
+                        "the .hea file: " + ", ".join(missing_files)
+                    )
+
+                # Prepare heartbeat segments and run CNN prediction
+                (
+                    record,
+                    signal_360,
+                    peaks,
+                    X_input,
+                    detector_name,
+                    original_fs,
+                ) = prepare_record(record_base)
+
+                model_output = model.predict(X_input, verbose=0)
+
+                if model_output.ndim != 2 or model_output.shape[1] != 5:
+                    raise ValueError(
+                        f"Unexpected model output shape: {model_output.shape}"
+                    )
+
+                pred_indices = np.argmax(model_output, axis=1)
+                pred_classes = [CLASS_NAMES[i] for i in pred_indices]
+                confidences = np.max(model_output, axis=1) * 100
+
+                results = pd.DataFrame({
+                    "Beat #": np.arange(1, len(peaks) + 1),
+                    "R-peak time (s)": np.round(
+                        peaks / TRAINING_FS, 3
+                    ),
+                    "Predicted class": pred_classes,
+                    "Top score (%)": np.round(confidences, 2),
+                })
+
+                for i, class_name in enumerate(CLASS_NAMES):
+                    results[f"P({class_name}) (%)"] = np.round(
+                        model_output[:, i] * 100, 2
+                    )
+
+                counts = (
+                    pd.Series(pred_classes)
+                    .value_counts()
+                    .to_dict()
+                )
+
+                st.session_state["ecg_results"] = results
+                st.session_state["ecg_summary"] = {
+                    "record_name": record_base.name,
+                    "original_fs": original_fs,
+                    "duration": len(record.p_signal) / original_fs,
+                    "detector": detector_name,
+                    "num_beats": len(peaks),
+                    "counts": counts,
+                    "signal_360": signal_360,
+                    "peaks": peaks,
+                }
+
+        except Exception as exc:
+            st.error(f"Prediction failed: {exc}")
