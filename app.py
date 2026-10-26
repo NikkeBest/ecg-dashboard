@@ -41,6 +41,28 @@ def normalize_beat(beat: np.ndarray) -> np.ndarray:
     return (beat - beat.mean()) / (beat.std() + 1e-8)
 
 
+
+def compare_peak_positions(
+    detected: np.ndarray,
+    reference: np.ndarray,
+    tolerance_samples: int,
+) -> tuple[int, int, int]:
+    """One-to-one evaluation match; reference annotations never feed inference."""
+    detected = np.sort(np.asarray(detected, dtype=int))
+    reference = np.sort(np.asarray(reference, dtype=int))
+    i = j = matched = 0
+    while i < len(detected) and j < len(reference):
+        delta = int(detected[i]) - int(reference[j])
+        if abs(delta) <= tolerance_samples:
+            matched += 1
+            i += 1
+            j += 1
+        elif delta < -tolerance_samples:
+            i += 1
+        else:
+            j += 1
+    return matched, len(detected) - matched, len(reference) - matched
+
 def _read_header_frequency(header_path: Path) -> float:
     """Read WFDB's base sampling frequency, including optional counter suffixes."""
     try:
@@ -103,7 +125,7 @@ def _find_header_files(upload_paths: list[Path], root: Path) -> list[Path]:
     return sorted(found.values(), key=lambda p: p.name.lower())
 
 
-def detect_r_peaks(signal: np.ndarray, fs: int) -> tuple[np.ndarray, str]:
+def detect_r_peaks(signal: np.ndarray, fs: int) -> tuple[np.ndarray, str, str]:
     signal = np.asarray(signal, dtype=np.float64).reshape(-1)
     signal = np.nan_to_num(signal, nan=0.0, posinf=0.0, neginf=0.0)
     if len(signal) < max(20, int(fs * 2)):
@@ -111,24 +133,28 @@ def detect_r_peaks(signal: np.ndarray, fs: int) -> tuple[np.ndarray, str]:
     try:
         peaks = np.asarray(wfdb.processing.xqrs_detect(sig=signal, fs=fs, verbose=False), dtype=int)
         if len(peaks) >= 2:
-            return peaks, "WFDB XQRS"
-    except Exception:
-        pass
+            return peaks, "WFDB XQRS", "XQRS completed successfully."
+        xqrs_diagnostic = f"WFDB XQRS returned only {len(peaks)} peak(s); at least 2 are required."
+    except Exception as exc:
+        xqrs_diagnostic = f"WFDB XQRS failed: {type(exc).__name__}: {exc}"
     if fs <= 40:
-        raise ValueError("Sampling frequency is too low for the fallback QRS detector.")
+        raise ValueError(f"{xqrs_diagnostic} Sampling frequency is too low for the fallback QRS detector.")
     high = min(20.0, fs * 0.45)
     sos = butter(2, [5.0, high], btype="bandpass", fs=fs, output="sos")
     try:
         filtered = sosfiltfilt(sos, signal)
     except ValueError as exc:
-        raise ValueError("The signal is too short to filter for heartbeat detection.") from exc
+        raise ValueError(f"{xqrs_diagnostic} Signal is too short to filter for heartbeat detection.") from exc
     prominence = max(float(np.std(filtered)) * 0.35, 1e-6)
+    # Absolute-valued ECG can make both lobes of one QRS complex look like peaks.
+    # This is a best-effort fallback and its output count must be treated cautiously.
     peaks, _ = find_peaks(np.abs(filtered), distance=max(1, int(0.25 * fs)), prominence=prominence)
     if len(peaks) < 2:
-        raise ValueError("Could not detect enough heartbeats. Check the signal channel and sampling rate.")
-    return peaks.astype(int), "SciPy fallback (approximate)"
-
-
+        raise ValueError(
+            f"{xqrs_diagnostic} SciPy fallback found only {len(peaks)} peak(s). "
+            "Check the signal channel and sampling rate."
+        )
+    return peaks.astype(int), "SciPy fallback (approximate)", xqrs_diagnostic
 def prepare_record(header_path: Path):
     """Read the first lead, resample if needed, and create model-ready beats."""
     if header_path.suffix.lower() != ".hea" or not header_path.is_file():
@@ -161,7 +187,7 @@ def prepare_record(header_path: Path):
     if not math.isclose(original_fs, TRAINING_FS, rel_tol=0, abs_tol=1e-6):
         ratio = Fraction(TRAINING_FS / original_fs).limit_denominator(10000)
         signal = resample_poly(signal, ratio.numerator, ratio.denominator)
-    peaks, detector_name = detect_r_peaks(signal, TRAINING_FS)
+    peaks, detector_name, detector_diagnostic = detect_r_peaks(signal, TRAINING_FS)
 
     beats, valid_peaks = [], []
     for peak in peaks:
@@ -175,7 +201,8 @@ def prepare_record(header_path: Path):
     model_input = np.asarray(beats, dtype=np.float32)[..., np.newaxis]
     return (
         record, signal, np.asarray(valid_peaks), model_input,
-        detector_name, original_fs, lead_name,
+        detector_name, original_fs, lead_name, detector_diagnostic,
+        len(peaks), len(peaks) - len(valid_peaks), len(valid_peaks),
     )
 
 
@@ -254,7 +281,7 @@ def main() -> None:
 
         if st.button("Analyze recording", type="primary"):
             with st.spinner("Detecting beats and running the model…"):
-                record, signal, peaks, X_input, detector, original_fs, lead_name = prepare_record(selected_header)
+                record, signal, peaks, X_input, detector, original_fs, lead_name, detector_diagnostic, detected_count, excluded_count, passed_count = prepare_record(selected_header)
                 predictions = np.asarray(model.predict(X_input, verbose=0))
 
             if predictions.ndim != 2 or predictions.shape[0] != len(X_input):
@@ -269,11 +296,39 @@ def main() -> None:
                 "Class": [CLASS_NAMES[int(i)] for i in class_ids],
                 "Confidence": predictions.max(axis=1),
             })
-            st.success(f"Analyzed {len(results)} complete beats using {detector}.")
-            c1, c2, c3 = st.columns(3)
+            st.success(f"Analyzed {passed_count} complete beats using {detector}.")
+            if detector != "WFDB XQRS":
+                st.warning(
+                    f"{detector_diagnostic} The app used the approximate SciPy fallback. "
+                    "Review the detector count before interpreting any beat classifications."
+                )
+            c1, c2, c3, c4 = st.columns(4)
             c1.metric("First lead", lead_name)
-            c2.metric("Record sampling rate", f"{original_fs:g} Hz")
-            c3.metric("Detected beats", f"{len(results)}")
+            c2.metric("Detected peaks", f"{detected_count}")
+            c3.metric("Excluded: incomplete window", f"{excluded_count}")
+            c4.metric("Passed to CNN", f"{passed_count}")
+            atr_path = selected_header.with_suffix(".atr")
+            if atr_path.is_file():
+                try:
+                    annotations = wfdb.rdann(str(selected_header.with_suffix("")), "atr")
+                    beat_symbols = {"N", "L", "R", "e", "j", "A", "a", "J", "S", "V", "E", "F", "/", "f", "Q"}
+                    beat_mask = [symbol in beat_symbols for symbol in annotations.symbol]
+                    annotated_samples = np.asarray(annotations.sample)[beat_mask]
+                    tolerance = int(round(0.15 * TRAINING_FS))
+                    matched, extra, missed = compare_peak_positions(peaks, annotated_samples, tolerance)
+                    st.caption(
+                        f"Annotation comparison for evaluation only (±150 ms): {len(annotated_samples)} "
+                        f"recognized reference beats; {matched} automatic peaks matched, {extra} automatic "
+                        f"peaks unmatched, {missed} reference beats missed. Annotations were not used for inference."
+                    )
+                    if extra:
+                        st.warning(
+                            f"The automatic detector produced {extra} peaks with no one-to-one annotation "
+                            "match within 150 ms. These can be extra detections, including secondary waveform "
+                            "peaks; inspect the ECG and annotations before trusting beat classifications."
+                        )
+                except Exception as exc:
+                    st.info(f"Could not read the optional .atr file for evaluation: {exc}")
 
             counts = results["Class"].value_counts().rename_axis("Class").reset_index(name="Beats")
             st.subheader("Classification summary")
@@ -302,3 +357,9 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
