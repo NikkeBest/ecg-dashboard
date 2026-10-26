@@ -615,7 +615,7 @@ def main() -> None:
         if st.session_state.get("ecg_llm_payload"):
             st.divider()
             st.header("Groq ECG Analysis (Research Prototype)")
-            st.caption("Groq receives summary metrics and model outputs, not the raw ECG waveform or full beat table.")
+            st.caption("Clinician-facing discussion aid: highlights items to verify with a doctor. Groq receives summary metrics and model outputs, not the raw ECG waveform or full beat table.")
             if not groq_available():
                 st.info("To enable Groq, add GROQ_API_KEY to Streamlit Secrets. See GROQ_SETUP.md for setup.")
             payload = st.session_state["ecg_llm_payload"]
@@ -624,20 +624,20 @@ def main() -> None:
                     try:
                         st.session_state["ecg_llm_report"] = ask_groq(
                             payload,
-                            "Write an English report with sections: Summary, Model Output Distribution, Data Quality and Uncertainty, Limitations, and Suggested Next Steps. Only describe supplied metrics. Do not diagnose.",
+                            "Write an English clinician-facing review brief for the user to discuss with their doctor. Use sections: 1) Key Results (report only supplied metrics), 2) Items Worth Clinician Review (prioritize model-labeled non-N beats and low-confidence beats as items to verify, not confirmed abnormalities), 3) Questions to Ask the Doctor, 4) What This Report Cannot Establish, and 5) Suggested Follow-up/Validation. For each suggested review item, explain why it merits checking and what evidence is missing. Explicitly state that this app did not inspect the raw waveform and that model labels are not diagnoses. Do not infer disease, prescribe treatment, or assign clinical urgency from these metrics. Do not invent findings. If no reference annotations are available, say prediction correctness cannot be assessed from this report alone.",
                         )
                     except Exception as exc:
                         st.error(f"Groq request failed: {exc}")
             if st.session_state.get("ecg_llm_report"):
                 st.markdown(st.session_state["ecg_llm_report"])
                 st.download_button("Download Groq report (.md)", st.session_state["ecg_llm_report"], file_name="ecg_groq_analysis_report.md", mime="text/markdown")
-            st.subheader("Ask Groq about these results")
+            st.subheader("Prepare questions for your doctor")
             if "ecg_llm_chat" not in st.session_state:
                 st.session_state["ecg_llm_chat"] = []
             for item in st.session_state["ecg_llm_chat"]:
                 with st.chat_message(item["role"]):
                     st.markdown(item["content"])
-            question = st.chat_input("Ask about class counts, confidence, or detection limitations…")
+            question = st.chat_input("Ask what to discuss with your doctor, or which results need verification…")
             if question:
                 prior_history = list(st.session_state["ecg_llm_chat"])
                 st.session_state["ecg_llm_chat"].append({"role": "user", "content": question})
