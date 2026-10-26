@@ -1,30 +1,29 @@
-# Gemini setup for ECG Heartbeat Classification Dashboard
+# Groq setup for ECG Heartbeat Classification Dashboard
 
 ## Configure the API key
 
-1. Create a Gemini API key in Google AI Studio: https://aistudio.google.com/app/apikey
-2. In Streamlit Community Cloud, open your app's **Settings → Secrets**.
-3. Add this TOML entry (replace the placeholder locally in the Streamlit Secrets UI only):
+1. Create a key in the Groq Console: https://console.groq.com/keys
+2. Open your app in Streamlit Community Cloud and go to **Settings → Secrets**.
+3. Add the following TOML (paste your real key only in Streamlit Secrets; never in source code):
 
 ```toml
-GEMINI_API_KEY = "your-real-api-key"
-# Optional; defaults to gemini-2.5-flash
-GEMINI_MODEL = "gemini-2.5-flash"
+GROQ_API_KEY = "your-real-api-key"
+# Optional. Use a model ID currently available to your Groq account.
+GROQ_MODEL = "llama-3.3-70b-versatile"
 ```
 
-For local development, create `.streamlit/secrets.toml` with the same entries. Do not commit that file or put a real key in source code, screenshots, issues, or chat. If a key is exposed, revoke it and create a new one. The app also accepts `GEMINI_API_KEY` as an environment variable.
+For local development, put the same entries in `.streamlit/secrets.toml` and do not commit that file. The app also accepts `GROQ_API_KEY` and `GROQ_MODEL` environment variables. Never paste your API key into chat, GitHub, screenshots, or issue reports. If exposed, revoke it and create a replacement.
 
-## What Gemini receives
+## What is sent
 
-After a prediction run, the app calculates a compact JSON summary: counts and percentages for N/S/V/F/Q, mean CNN confidence, number of low-confidence beats, an approximate heart-rate estimate from detected centers, detector metadata, and reference-mode metrics when available. It does **not** send the raw waveform or full beat-by-beat table to Gemini.
+The app sends a compact JSON summary of model outputs (class counts and percentages, mean confidence, low-confidence count, estimated heart rate, detector metadata, and reference-mode metrics if available) plus your question and a short chat history. It does not send the raw ECG waveform or full beat table to Groq.
 
-The English report can be downloaded as Markdown. The chat assistant answers follow-up questions about the current run and keeps a short in-session conversation history.
+If the configured model is unavailable, change `GROQ_MODEL` in Streamlit Secrets to a model ID listed in your Groq Console. Free usage limits and available models can change; check the console for current limits.
 
-## Medical and privacy limitations
+## Safety and privacy
 
-- This is a research/student prototype, not a medical device and not clinically validated.
-- N/S/V/F/Q are classifier labels, not diagnoses. The LLM must not be used to diagnose, rule out disease, or recommend treatment.
-- Heart rate estimates may be wrong if R peaks are missed, extra peaks are detected, or the signal quality is poor.
-- Review results with a qualified healthcare professional. If a person reports chest pain, fainting, or severe shortness of breath, seek urgent local medical care.
-- Only send data you are authorized to process. This integration sends derived summary metrics and user questions to Google's Gemini API; review Google's current terms and privacy documentation before using real/patient data.
-- API calls may incur usage charges and are subject to account quotas. Monitor usage in Google AI Studio.
+- Research/student prototype only; not a medical device and not clinically validated.
+- N/S/V/F/Q are classifier labels, not diagnoses. Do not use this assistant to diagnose, rule out disease, or choose treatment.
+- Heart-rate estimates may be inaccurate if peaks are missed or extra peaks are detected.
+- Review results with a qualified healthcare professional. For chest pain, fainting, or severe shortness of breath, seek urgent local medical care.
+- Only submit data you are authorized to process. Review Groq's current terms and privacy documentation before processing real/patient data.
