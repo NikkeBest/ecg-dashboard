@@ -60,8 +60,12 @@ def ask_gemini(payload: dict[str, Any], question: str, history: list[dict[str, s
         "conversation_history": transcript,
         "user_question": question[:2000],
     }
+    try:
+        configured_model = st.secrets.get("GEMINI_MODEL", "gemini-2.5-flash")
+    except Exception:
+        configured_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     response = client.models.generate_content(
-        model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+        model=configured_model,
         contents=json.dumps(request, ensure_ascii=False, allow_nan=False),
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_INSTRUCTION,
