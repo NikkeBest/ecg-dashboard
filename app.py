@@ -32,6 +32,16 @@ CLASS_NAMES = {
 }
 
 
+ANNOTATION_TO_CLASS = {
+    "N": "N", "L": "N", "R": "N", "e": "N", "j": "N",
+    "A": "S", "a": "S", "J": "S", "S": "S",
+    "V": "V", "E": "V",
+    "F": "F",
+    "/": "Q", "f": "Q", "Q": "Q",
+}
+CLASS_TO_ID = {name: index for index, name in CLASS_NAMES.items()}
+
+
 @st.cache_resource(show_spinner="Loading the ECG classification model…")
 def load_model(model_path: str):
     return tf.keras.models.load_model(model_path, compile=False)
@@ -157,68 +167,194 @@ def detect_r_peaks(signal: np.ndarray, fs: int) -> tuple[np.ndarray, str, str]:
         )
     return peaks.astype(int), "SciPy fallback (approximate)", xqrs_diagnostic
 
-def prepare_record(header_path: Path):
-    """Read the first lead, resample if needed, and create model-ready beats."""
-    if header_path.suffix.lower() != ".hea" or not header_path.is_file():
-        raise ValueError("Select a WFDB .hea header file.")
-    header_fs = _read_header_frequency(header_path)
+def _matching_sidecar(header_path: Path, suffix: str) -> Path | None:
+    """Find a sidecar by record stem without assuming extension case."""
+    target = f"{header_path.stem}{suffix}".lower()
+    for candidate in header_path.parent.iterdir():
+        if candidate.is_file() and candidate.name.lower() == target:
+            return candidate
+    return None
+
+
+def _validate_record_files(header_path: Path, require_dat: bool = False) -> None:
+    """Give explicit errors for missing signal files referenced by the WFDB header."""
+    try:
+        lines = header_path.read_text(encoding="ascii", errors="replace").splitlines()
+        fields = lines[0].split()
+        signal_count = int(fields[1])
+    except (OSError, IndexError, ValueError) as exc:
+        raise ValueError(f"Cannot parse the WFDB header {header_path.name}.") from exc
+
+    references = []
+    for line in lines[1:1 + signal_count]:
+        parts = line.split()
+        if not parts or parts[0].startswith("#") or parts[0] == "~":
+            continue
+        relative = Path(parts[0].replace("\\", "/"))
+        candidate = (header_path.parent / relative).resolve()
+        if header_path.parent.resolve() not in candidate.parents and candidate != header_path.parent.resolve():
+            raise ValueError("The WFDB header references a signal file outside its upload folder.")
+        references.append((parts[0], candidate))
+
+    if not references:
+        raise ValueError(f"{header_path.name} does not name any readable WFDB signal file.")
+    missing = [name for name, path in references if not path.is_file()]
+    if missing:
+        raise ValueError(
+            "Missing signal file(s) referenced by the selected header: "
+            + ", ".join(missing)
+            + ". Upload the matching signal file(s) or a ZIP containing the complete record."
+        )
+    if require_dat and not any(Path(name).suffix.lower() == ".dat" for name, _ in references):
+        raise ValueError(
+            "Reference Annotation Mode requires the matching .dat signal file named by the .hea header."
+        )
+
+
+def _read_record(header_path: Path):
+    _validate_record_files(header_path)
     try:
         record = wfdb.rdrecord(str(header_path.with_suffix("")), physical=True)
     except Exception as exc:
         raise ValueError(
-            f"Could not load {header_path.name}. Include the matching signal file(s) "
-            "(.dat, .mat, or the format named in the header) with the .hea file."
+            f"WFDB could not read {header_path.name} and its signal file(s): "
+            f"{type(exc).__name__}: {exc}"
         ) from exc
-    if record.p_signal is None or record.p_signal.size == 0 or record.p_signal.shape[1] == 0:
+    if record.p_signal is None or record.p_signal.ndim != 2 or record.p_signal.shape[1] == 0:
         raise ValueError("The record has no readable ECG signal data.")
-
-    original_fs = float(record.fs)
-    if not math.isfinite(original_fs) or original_fs <= 0:
-        original_fs = header_fs
-    if not math.isclose(original_fs, header_fs, rel_tol=0, abs_tol=1e-6):
-        raise ValueError("The sampling frequency parsed from the header does not match WFDB.")
-
-    # Training used the first signal lead, regardless of other available leads.
+    fs = float(record.fs)
+    if not math.isfinite(fs) or fs <= 0:
+        raise ValueError("The WFDB record reports an invalid sampling frequency.")
     lead_name = record.sig_name[0] if record.sig_name else "Lead 0"
     signal = np.asarray(record.p_signal[:, 0], dtype=np.float64)
     if not np.isfinite(signal).any():
         raise ValueError("The first ECG lead contains no finite samples.")
     signal = np.nan_to_num(signal, nan=0.0, posinf=0.0, neginf=0.0)
+    return record, signal, fs, lead_name
 
-    # Detect peaks only after any resampling so their indices use 360 Hz coordinates.
+
+def extract_beat_windows(signal: np.ndarray, centers: np.ndarray):
+    """Shared training-matched windowing and per-beat normalization."""
+    beats = []
+    valid_centers = []
+    valid_source_indices = []
+    excluded = 0
+    for source_index, center in enumerate(np.asarray(centers, dtype=int)):
+        start = int(center) - BEAT_PRE_SAMPLES
+        end = start + BEAT_LENGTH
+        if start < 0 or end > len(signal):
+            excluded += 1
+            continue
+        beat = np.asarray(signal[start:end], dtype=np.float32)
+        beat = (beat - beat.mean()) / (beat.std() + 1e-8)
+        beats.append(beat)
+        valid_centers.append(int(center))
+        valid_source_indices.append(source_index)
+    if beats:
+        batch = np.asarray(beats, dtype=np.float32)[..., np.newaxis]
+    else:
+        batch = np.empty((0, BEAT_LENGTH, 1), dtype=np.float32)
+    return batch, np.asarray(valid_centers, dtype=int), np.asarray(valid_source_indices, dtype=int), excluded
+
+
+def prepare_reference_record(header_path: Path):
+    """Prepare labeled annotation-centered beats; never invoke a peak detector."""
+    _validate_record_files(header_path, require_dat=True)
+    atr_path = _matching_sidecar(header_path, ".atr")
+    if atr_path is None:
+        raise ValueError(
+            f"Reference Annotation Mode requires {header_path.stem}.atr alongside the selected record."
+        )
+    record, signal, fs, lead_name = _read_record(header_path)
+    if not math.isclose(fs, TRAINING_FS, rel_tol=0, abs_tol=1e-6):
+        raise ValueError(
+            f"Training used 360 Hz records without resampling; this record is {fs:g} Hz. "
+            "Reference-mode equivalence cannot be claimed for a different sampling rate."
+        )
+    try:
+        annotation = wfdb.rdann(str(header_path.with_suffix("")), "atr")
+    except Exception as exc:
+        raise ValueError(f"Could not read matching annotation file {atr_path.name}: {exc}") from exc
+
+    all_symbols = list(annotation.symbol)
+    supported = [
+        (int(sample), symbol, CLASS_TO_ID[ANNOTATION_TO_CLASS[symbol]])
+        for sample, symbol in zip(annotation.sample, all_symbols)
+        if symbol in ANNOTATION_TO_CLASS
+    ]
+    centers = np.asarray([item[0] for item in supported], dtype=int)
+    y_all = np.asarray([item[2] for item in supported], dtype=np.int32)
+    symbols_all = np.asarray([item[1] for item in supported], dtype=object)
+    X, valid_centers, valid_indices, excluded = extract_beat_windows(signal, centers)
+    return {
+        "record": record, "signal": signal, "fs": fs, "lead_name": lead_name,
+        "annotation": annotation, "atr_path": atr_path, "X": X,
+        "centers": valid_centers, "y_true": y_all[valid_indices],
+        "symbols": symbols_all[valid_indices], "total_annotations": len(all_symbols),
+        "supported_annotations": len(supported), "ignored_annotations": len(all_symbols) - len(supported),
+        "excluded": excluded,
+    }
+
+
+def prepare_automatic_record(header_path: Path):
+    """Prepare detector-centered beats for deployment mode only."""
+    record, signal, original_fs, lead_name = _read_record(header_path)
     if not math.isclose(original_fs, TRAINING_FS, rel_tol=0, abs_tol=1e-6):
         ratio = Fraction(TRAINING_FS / original_fs).limit_denominator(10000)
         signal = resample_poly(signal, ratio.numerator, ratio.denominator)
-    peaks, detector_name, detector_diagnostic = detect_r_peaks(signal, TRAINING_FS)
+    peaks, detector_name, diagnostic = detect_r_peaks(signal, TRAINING_FS)
+    X, valid_peaks, _, excluded = extract_beat_windows(signal, peaks)
+    if len(X) == 0:
+        raise ValueError(f"{len(peaks)} peaks were detected, but none had a complete 187-sample window.")
+    return {
+        "record": record, "signal": signal, "original_fs": original_fs,
+        "lead_name": lead_name, "detector": detector_name, "diagnostic": diagnostic,
+        "all_peaks": peaks, "valid_peaks": valid_peaks, "X": X,
+        "detected_count": len(peaks), "valid_count": len(valid_peaks), "excluded": excluded,
+    }
 
-    beats, valid_peaks = [], []
-    for peak in peaks:
-        start = int(peak) - BEAT_PRE_SAMPLES
-        end = start + BEAT_LENGTH  # exclusive: includes peak + 96 as the last sample
-        if start >= 0 and end <= len(signal):
-            beats.append(normalize_beat(signal[start:end]))
-            valid_peaks.append(int(peak))
-    if not beats:
-        raise ValueError("No complete 187-sample heartbeat windows could be extracted.")
-    model_input = np.asarray(beats, dtype=np.float32)[..., np.newaxis]
-    return (
-        record, signal, np.asarray(peaks), np.asarray(valid_peaks), model_input,
-        detector_name, original_fs, lead_name, detector_diagnostic,
-        len(peaks), len(peaks) - len(valid_peaks), len(valid_peaks),
-    )
+
+def _classification_metrics(y_true: np.ndarray, y_pred: np.ndarray):
+    matrix = np.zeros((5, 5), dtype=np.int64)
+    for truth, prediction in zip(y_true, y_pred):
+        matrix[int(truth), int(prediction)] += 1
+    rows = []
+    for index, name in CLASS_NAMES.items():
+        tp = int(matrix[index, index])
+        predicted_count = int(matrix[:, index].sum())
+        support = int(matrix[index, :].sum())
+        precision = tp / predicted_count if predicted_count else 0.0
+        recall = tp / support if support else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+        rows.append({"Class": name, "Precision": precision, "Recall": recall, "F1": f1, "Support": support})
+    accuracy = float(np.mean(y_true == y_pred)) if len(y_true) else float("nan")
+    report = pd.DataFrame(rows)
+    report.loc[len(report)] = {
+        "Class": "Macro avg", "Precision": report["Precision"].mean(),
+        "Recall": report["Recall"].mean(), "F1": report["F1"].mean(), "Support": len(y_true),
+    }
+    if len(y_true):
+        weights = report.iloc[:5]["Support"].to_numpy(dtype=float) / len(y_true)
+        report.loc[len(report)] = {
+            "Class": "Weighted avg",
+            "Precision": float(np.sum(report.iloc[:5]["Precision"].to_numpy() * weights)),
+            "Recall": float(np.sum(report.iloc[:5]["Recall"].to_numpy() * weights)),
+            "F1": float(np.sum(report.iloc[:5]["F1"].to_numpy() * weights)),
+            "Support": len(y_true),
+        }
+    return matrix, report, accuracy
 
 
 def main() -> None:
     st.set_page_config(page_title="ECG Heartbeat Classification", page_icon="💓", layout="wide")
     st.title("💓 ECG Heartbeat Classification")
     st.write(
-        "Upload a WFDB ECG record and classify automatically detected heartbeat windows with the trained CNN. "
-        "Upload the .hea header and every signal file named by that header, or upload a ZIP bundle."
+        "Compare annotation-centered evaluation with deployment-style automatic R-peak detection "
+        "using the same trained CNN and shared heartbeat preprocessing."
     )
     st.warning(
         "Research/student prototype only — not clinically validated and not a medical diagnosis. "
-        "R-peaks are detected automatically; they may differ from the annotated beat positions used "
-        "during training, which can affect classification accuracy. An .atr file is not required."
+        "Automatic peak positions can differ from reference annotations and affect predictions."
     )
 
     if not MODEL_PATH.is_file():
@@ -240,22 +376,38 @@ def main() -> None:
         st.error(f"Expected a five-class model output; model output shape is {output_shape}.")
         st.stop()
 
+    mode = st.radio(
+        "Inference mode",
+        ["Reference Annotation Mode (evaluation)", "Automatic Detection Mode (deployment)"],
+        horizontal=True,
+    )
+    if mode.startswith("Reference"):
+        st.info(
+            "Requires the matching .hea, .dat, and .atr. Uses the first signal lead and annotation "
+            "sample positions directly; XQRS/SciPy detection is not run. Unsupported annotation symbols "
+            "are reported and skipped, as in training."
+        )
+    else:
+        st.info(
+            "Requires the .hea and its referenced signal file (normally .dat). XQRS detects beats "
+            "automatically; the approximate SciPy fallback is used only if XQRS fails or returns fewer "
+            "than two peaks. An optional matching .atr is used only for evaluation comparison."
+        )
+
     uploaded_files = st.file_uploader(
-        "WFDB files (.hea and matching signal file), or a ZIP bundle",
+        "WFDB files (.hea and matching signal file; add .atr for reference evaluation), or a ZIP bundle",
         type=["hea", "dat", "mat", "atr", "xyz", "zip"],
         accept_multiple_files=True,
     )
     if not uploaded_files:
-        st.info("Choose a WFDB header and its corresponding signal file(s) to begin.")
+        st.info("Upload the files required for the selected mode to begin.")
         return
 
-    # Keep uploaded files stable across Streamlit reruns caused by widget changes.
     if "ecg_upload_dir" not in st.session_state:
         st.session_state.ecg_upload_dir = tempfile.mkdtemp(prefix="ecg_upload_")
     root = Path(st.session_state.ecg_upload_dir)
     root.mkdir(parents=True, exist_ok=True)
     try:
-        # Rebuild the temporary session folder to avoid stale records from earlier uploads.
         for child in root.iterdir():
             if child.is_dir():
                 shutil.rmtree(child)
@@ -265,99 +417,170 @@ def main() -> None:
         saved = _save_uploads(uploaded_files, root)
         headers = _find_header_files(saved, root)
         if not headers:
-            raise ValueError("No .hea file was found. Upload it with its signal file, or use a ZIP bundle.")
+            raise ValueError("No .hea file was found. Upload it with its signal file or use a ZIP bundle.")
 
-        header_options = [p.relative_to(root).as_posix() for p in headers]
+        header_options = [path.relative_to(root).as_posix() for path in headers]
         selected_name = st.selectbox("Choose ECG record", header_options)
         selected_header = root.joinpath(*Path(selected_name).parts)
-        try:
-            record_for_lead = wfdb.rdrecord(str(selected_header.with_suffix("")), physical=True)
-            lead_name = record_for_lead.sig_name[0] if record_for_lead.sig_name else "Lead 0"
-            st.caption(f"Lead used for inference: {lead_name} (first ECG lead)")
-        except Exception as exc:
-            st.error(
-                "Unable to read the selected WFDB record. Check that the .hea file and its matching "
-                f"signal file are uploaded. Details: {exc}"
-            )
-            return
-
-        if st.button("Analyze recording", type="primary"):
-            with st.spinner("Detecting beats and running the model…"):
-                (
-                    record, signal, all_peaks, peaks, X_input, detector, original_fs,
-                    lead_name, detector_diagnostic, detected_count, excluded_count, passed_count,
-                ) = prepare_record(selected_header)
-                predictions = np.asarray(model.predict(X_input, verbose=0))
-
-            if predictions.ndim != 2 or predictions.shape[0] != len(X_input):
-                raise ValueError("The model returned an unexpected output shape.")
-            if predictions.shape[1] != 5:
-                raise ValueError(f"Expected a five-class model output; received {predictions.shape[1]} classes.")
-
-            class_ids = predictions.argmax(axis=1)
-            results = pd.DataFrame({
-                "Beat": np.arange(1, len(class_ids) + 1),
-                "Time (s)": peaks / TRAINING_FS,
-                "Class": [CLASS_NAMES[int(i)] for i in class_ids],
-                "Confidence": predictions.max(axis=1),
-            })
-            st.success(f"Analyzed {passed_count} complete beats using {detector}.")
-            if detector != "WFDB XQRS":
-                st.warning(
-                    f"{detector_diagnostic} The app used the approximate SciPy fallback. "
-                    "Review the detector count before interpreting any beat classifications."
-                )
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("First lead", lead_name)
-            c2.metric("Detected peaks", f"{detected_count}")
-            c3.metric("Excluded: incomplete window", f"{excluded_count}")
-            c4.metric("Passed to CNN", f"{passed_count}")
-            atr_path = selected_header.with_suffix(".atr")
-            if atr_path.is_file():
+        if st.button(
+            "Run reference evaluation" if mode.startswith("Reference") else "Analyze automatically",
+            type="primary",
+        ):
+            if mode.startswith("Reference"):
                 try:
-                    annotations = wfdb.rdann(str(selected_header.with_suffix("")), "atr")
-                    beat_symbols = {"N", "L", "R", "e", "j", "A", "a", "J", "S", "V", "E", "F", "/", "f", "Q"}
-                    beat_mask = [symbol in beat_symbols for symbol in annotations.symbol]
-                    annotated_samples = np.asarray(annotations.sample)[beat_mask]
-                    tolerance = int(round(0.15 * TRAINING_FS))
-                    matched, extra, missed = compare_peak_positions(all_peaks, annotated_samples, tolerance)
-                    st.caption(
-                        f"Annotation comparison for evaluation only (±150 ms): {len(annotated_samples)} "
-                        f"recognized reference beats; {matched} automatic peaks matched, {extra} automatic "
-                        f"peaks unmatched, {missed} reference beats missed. Annotations were not used for inference."
+                    data = prepare_reference_record(selected_header)
+                except ValueError as exc:
+                    st.error(str(exc))
+                    return
+                if len(data["X"]) == 0:
+                    st.error(
+                        f"No eligible labeled beats: {data['total_annotations']} total annotations, "
+                        f"{data['supported_annotations']} supported beat annotations, "
+                        f"{data['excluded']} excluded at the signal boundaries."
                     )
-                    if extra:
-                        st.warning(
-                            f"The automatic detector produced {extra} peaks with no one-to-one annotation "
-                            "match within 150 ms. These can be extra detections, including secondary waveform "
-                            "peaks; inspect the ECG and annotations before trusting beat classifications."
+                    return
+                with st.spinner("Predicting annotation-centered beats…"):
+                    probabilities = np.asarray(model.predict(data["X"], verbose=0))
+                if probabilities.ndim != 2 or probabilities.shape != (len(data["X"]), 5):
+                    raise ValueError(f"Expected prediction shape ({len(data['X'])}, 5); got {probabilities.shape}.")
+                if not np.isfinite(probabilities).all():
+                    raise ValueError("The CNN returned NaN or infinite prediction values.")
+                predictions = probabilities.argmax(axis=1)
+                matrix, report, accuracy = _classification_metrics(data["y_true"], predictions)
+
+                st.subheader("Reference annotation evaluation")
+                st.caption(
+                    "Reference symbols are WFDB annotation codes mapped using the notebook; "
+                    "model outputs are the five classes N, S, V, F, Q."
+                )
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Total annotations", f"{data['total_annotations']:,}")
+                c2.metric("Supported beat annotations", f"{data['supported_annotations']:,}")
+                c3.metric("Eligible beats", f"{len(data['X']):,}")
+                c4.metric("Excluded: incomplete window", f"{data['excluded']:,}")
+                st.caption(
+                    f"Ignored unsupported/non-beat annotation symbols: {data['ignored_annotations']:,}. "
+                    f"Lead used: {data['lead_name']} at {data['fs']:g} Hz."
+                )
+                st.metric("Accuracy on eligible annotated beats", f"{accuracy:.4f}")
+                class_counts = pd.Series(
+                    [CLASS_NAMES[int(i)] for i in predictions]
+                ).value_counts().reindex(list(CLASS_NAMES.values()), fill_value=0)
+                st.subheader("Predicted class distribution")
+                st.plotly_chart(
+                    px.bar(
+                        pd.DataFrame({"Class": class_counts.index, "Beats": class_counts.values}),
+                        x="Class", y="Beats", color="Class",
+                    ),
+                    width="stretch",
+                )
+                st.subheader("Confusion matrix")
+                st.caption("Rows are reference labels; columns are CNN predictions.")
+                st.dataframe(
+                    pd.DataFrame(matrix, index=list(CLASS_NAMES.values()), columns=list(CLASS_NAMES.values()))
+                    .rename_axis("Reference"),
+                    width="stretch",
+                )
+                st.subheader("Classification report")
+                st.dataframe(report, width="stretch", hide_index=True)
+                results = pd.DataFrame({
+                    "Beat": np.arange(1, len(predictions) + 1),
+                    "Time (s)": data["centers"] / TRAINING_FS,
+                    "Reference annotation symbol": data["symbols"],
+                    "Reference class": [CLASS_NAMES[int(i)] for i in data["y_true"]],
+                    "Predicted class": [CLASS_NAMES[int(i)] for i in predictions],
+                    "Correct": data["y_true"] == predictions,
+                    "Confidence": probabilities.max(axis=1),
+                })
+                signal = data["signal"]
+                lead_name = data["lead_name"]
+                sampling_rate = data["fs"]
+                csv_stem = selected_header.stem
+            else:
+                try:
+                    data = prepare_automatic_record(selected_header)
+                except ValueError as exc:
+                    st.error(str(exc))
+                    return
+                with st.spinner("Predicting automatically detected beats…"):
+                    probabilities = np.asarray(model.predict(data["X"], verbose=0))
+                if probabilities.ndim != 2 or probabilities.shape != (len(data["X"]), 5):
+                    raise ValueError(f"Expected prediction shape ({len(data['X'])}, 5); got {probabilities.shape}.")
+                if not np.isfinite(probabilities).all():
+                    raise ValueError("The CNN returned NaN or infinite prediction values.")
+                predictions = probabilities.argmax(axis=1)
+                st.subheader("Automatic detection results")
+                if data["detector"] != "WFDB XQRS":
+                    st.warning(
+                        f"{data['diagnostic']} The app used the documented approximate SciPy fallback "
+                        f"(5–{min(20.0, TRAINING_FS * 0.45):g} Hz band-pass, absolute-signal local maxima, "
+                        "250 ms minimum spacing). Secondary waveform peaks can be counted; review detections."
+                    )
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Detector", data["detector"])
+                c2.metric("Detected peaks", f"{data['detected_count']:,}")
+                c3.metric("Valid 187-sample windows", f"{data['valid_count']:,}")
+                c4.metric("Excluded: incomplete window", f"{data['excluded']:,}")
+                class_counts = pd.Series(
+                    [CLASS_NAMES[int(i)] for i in predictions]
+                ).value_counts().reindex(list(CLASS_NAMES.values()), fill_value=0)
+                st.subheader("Predicted class distribution")
+                st.plotly_chart(
+                    px.bar(
+                        pd.DataFrame({"Class": class_counts.index, "Beats": class_counts.values}),
+                        x="Class", y="Beats", color="Class",
+                    ),
+                    width="stretch",
+                )
+
+                atr_path = _matching_sidecar(selected_header, ".atr")
+                if atr_path is not None:
+                    try:
+                        annotation = wfdb.rdann(str(selected_header.with_suffix("")), "atr")
+                        reference_centers = np.asarray([
+                            int(sample) for sample, symbol in zip(annotation.sample, annotation.symbol)
+                            if symbol in ANNOTATION_TO_CLASS
+                        ], dtype=int)
+                        tolerance = int(round(0.15 * TRAINING_FS))
+                        matched, extra, missed = compare_peak_positions(
+                            data["all_peaks"], reference_centers, tolerance
                         )
-                except Exception as exc:
-                    st.info(f"Could not read the optional .atr file for evaluation: {exc}")
+                        st.caption(
+                            f"Optional .atr evaluation only (one-to-one, ±150 ms): "
+                            f"{matched:,} matched, {missed:,} reference beats missed, "
+                            f"{extra:,} extra detections. Annotations did not generate these predictions."
+                        )
+                    except Exception as exc:
+                        st.warning(f"Could not read the optional .atr file for comparison: {exc}")
 
-            counts = results["Class"].value_counts().rename_axis("Class").reset_index(name="Beats")
-            st.subheader("Classification summary")
-            st.plotly_chart(px.bar(counts, x="Class", y="Beats", color="Class"), width="stretch")
+                results = pd.DataFrame({
+                    "Beat": np.arange(1, len(predictions) + 1),
+                    "Time (s)": data["valid_peaks"] / TRAINING_FS,
+                    "Class": [CLASS_NAMES[int(i)] for i in predictions],
+                    "Confidence": probabilities.max(axis=1),
+                })
+                signal = data["signal"]
+                lead_name = data["lead_name"]
+                sampling_rate = TRAINING_FS
+                csv_stem = selected_header.stem
 
-            st.subheader(f"Detected ECG signal — {lead_name}")
-            plot_limit = min(len(signal), TRAINING_FS * 30)
+            st.subheader(f"ECG waveform — {lead_name}")
+            plot_limit = min(len(signal), int(sampling_rate * 30))
             signal_frame = pd.DataFrame({
-                "Time (s)": np.arange(plot_limit) / TRAINING_FS,
+                "Time (s)": np.arange(plot_limit) / sampling_rate,
                 "Amplitude": signal[:plot_limit],
             })
             st.plotly_chart(px.line(signal_frame, x="Time (s)", y="Amplitude"), width="stretch")
-
-            st.subheader("Beat predictions")
+            st.subheader("Per-beat results")
             st.dataframe(results, width="stretch", hide_index=True)
             st.download_button(
                 "Download predictions (CSV)",
                 results.to_csv(index=False).encode("utf-8"),
-                file_name=f"{selected_header.stem}_predictions.csv",
+                file_name=f"{csv_stem}_{'reference' if mode.startswith('Reference') else 'automatic'}_predictions.csv",
                 mime="text/csv",
             )
     except Exception as exc:
         st.error(str(exc))
-
 
 
 if __name__ == "__main__":
