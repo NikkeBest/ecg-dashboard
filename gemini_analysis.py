@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import json
 import os
+import random
+import time
 from typing import Any
 
 import streamlit as st
@@ -64,15 +66,36 @@ def ask_gemini(payload: dict[str, Any], question: str, history: list[dict[str, s
         configured_model = st.secrets.get("GEMINI_MODEL", "gemini-3.8-flash")
     except Exception:
         configured_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-    response = client.models.generate_content(
-        model=configured_model,
-        contents=json.dumps(request, ensure_ascii=False, allow_nan=False),
-        config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_INSTRUCTION,
-            temperature=0.2,
-            max_output_tokens=1200,
-        ),
-    )
+    last_error = None
+    # Retry transient provider overload and rate-limit errors with backoff.
+    for attempt in range(4):
+        try:
+            response = client.models.generate_content(
+                model=configured_model,
+                contents=json.dumps(request, ensure_ascii=False, allow_nan=False),
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_INSTRUCTION,
+                    temperature=0.2,
+                    max_output_tokens=1200,
+                ),
+            )
+            last_error = None
+            break
+        except Exception as exc:
+            last_error = exc
+            error_text = str(exc).upper()
+            temporary = any(code in error_text for code in ("503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "500", "502", "504"))
+            if not temporary or attempt == 3:
+                break
+            time.sleep(min(2 ** attempt, 8) + random.uniform(0, 0.5))
+    if last_error is not None:
+        if "503" in str(last_error) or "UNAVAILABLE" in str(last_error).upper():
+            raise RuntimeError(
+                "Gemini is temporarily overloaded (503). The app retried several times; "
+                "please wait a minute and try again. This is a temporary provider-capacity issue, "
+                "not an ECG prediction error."
+            ) from last_error
+        raise last_error
     answer = (response.text or "").strip()
     if not answer:
         raise RuntimeError("Gemini returned an empty response. Please try again.")
