@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import shutil
 import tempfile
 import zipfile
 from fractions import Fraction
@@ -155,6 +156,7 @@ def detect_r_peaks(signal: np.ndarray, fs: int) -> tuple[np.ndarray, str, str]:
             "Check the signal channel and sampling rate."
         )
     return peaks.astype(int), "SciPy fallback (approximate)", xqrs_diagnostic
+
 def prepare_record(header_path: Path):
     """Read the first lead, resample if needed, and create model-ready beats."""
     if header_path.suffix.lower() != ".hea" or not header_path.is_file():
@@ -360,6 +362,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
 
