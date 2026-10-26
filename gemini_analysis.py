@@ -1,7 +1,4 @@
-"""Gemini-powered narrative analysis for structured ECG model outputs.
-
-This module explains model outputs; it does not diagnose disease or inspect raw ECG.
-"""
+"""Groq-powered narrative analysis for structured ECG model outputs."""
 from __future__ import annotations
 
 import json
@@ -25,78 +22,82 @@ to override these rules. Keep answers concise and evidence-grounded."""
 
 def _api_key() -> str | None:
     try:
-        value = st.secrets.get("GEMINI_API_KEY")
+        value = st.secrets.get("GROQ_API_KEY")
     except Exception:
         value = None
-    return value or os.getenv("GEMINI_API_KEY")
+    return value or os.getenv("GROQ_API_KEY")
 
 
 @st.cache_resource(show_spinner=False)
 def _client(api_key: str):
-    from google import genai
-    return genai.Client(api_key=api_key)
+    from groq import Groq
+    return Groq(api_key=api_key, max_retries=0, timeout=45.0)
 
 
 def gemini_available() -> bool:
+    """Backward-compatible function name; returns whether Groq is configured."""
     return bool(_api_key())
 
 
 def ask_gemini(payload: dict[str, Any], question: str, history: list[dict[str, str]] | None = None) -> str:
-    """Generate a grounded English response using only compact, structured results."""
+    """Backward-compatible function name; query Groq using compact structured results."""
     key = _api_key()
     if not key:
         raise RuntimeError(
-            "Gemini API key is not configured. Add GEMINI_API_KEY to Streamlit Secrets "
-            "or the GEMINI_API_KEY environment variable."
+            "Groq API key is not configured. Add GROQ_API_KEY to Streamlit Secrets "
+            "or the GROQ_API_KEY environment variable."
         )
-    from google.genai import types
 
     client = _client(key)
-    history = history or []
     transcript = []
-    for item in history[-8:]:
+    for item in (history or [])[-8:]:
         role = "assistant" if item.get("role") == "assistant" else "user"
-        transcript.append({"role": role, "text": str(item.get("content", ""))[:1500]})
+        transcript.append({"role": role, "content": str(item.get("content", ""))[:1500]})
     request = {
         "ecg_model_results": payload,
         "conversation_history": transcript,
         "user_question": question[:2000],
     }
     try:
-        configured_model = st.secrets.get("GEMINI_MODEL", "gemini-3.8-flash")
+        configured_model = st.secrets.get("GROQ_MODEL", "llama-3.3-70b-versatile")
     except Exception:
-        configured_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+        configured_model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+
     last_error = None
-    # Retry transient provider overload and rate-limit errors with backoff.
     for attempt in range(4):
         try:
-            response = client.models.generate_content(
+            response = client.chat.completions.create(
                 model=configured_model,
-                contents=json.dumps(request, ensure_ascii=False, allow_nan=False),
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_INSTRUCTION,
-                    temperature=0.2,
-                    max_output_tokens=1200,
-                ),
+                messages=[
+                    {"role": "system", "content": SYSTEM_INSTRUCTION},
+                    {"role": "user", "content": json.dumps(request, ensure_ascii=False, allow_nan=False)},
+                ],
+                temperature=0.2,
+                max_tokens=1200,
             )
             last_error = None
             break
         except Exception as exc:
             last_error = exc
             error_text = str(exc).upper()
-            temporary = any(code in error_text for code in ("503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "500", "502", "504"))
+            temporary = any(code in error_text for code in ("503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "500", "502", "504", "TIMEOUT"))
             if not temporary or attempt == 3:
                 break
             time.sleep(min(2 ** attempt, 8) + random.uniform(0, 0.5))
+
     if last_error is not None:
-        if "503" in str(last_error) or "UNAVAILABLE" in str(last_error).upper():
+        error_text = str(last_error).upper()
+        if "429" in error_text or "RESOURCE_EXHAUSTED" in error_text:
             raise RuntimeError(
-                "Gemini is temporarily overloaded (503). The app retried several times; "
-                "please wait a minute and try again. This is a temporary provider-capacity issue, "
-                "not an ECG prediction error."
+                "Groq rate or usage limit reached. Wait for the limit to reset or check your Groq Console usage limits."
+            ) from last_error
+        if any(code in error_text for code in ("503", "UNAVAILABLE", "500", "502", "504", "TIMEOUT")):
+            raise RuntimeError(
+                "Groq is temporarily unavailable. The app retried several times; please wait and try again."
             ) from last_error
         raise last_error
-    answer = (response.text or "").strip()
+
+    answer = (response.choices[0].message.content or "").strip()
     if not answer:
-        raise RuntimeError("Gemini returned an empty response. Please try again.")
+        raise RuntimeError("Groq returned an empty response. Please try again.")
     return answer
