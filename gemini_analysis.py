@@ -61,7 +61,7 @@ def ask_gemini(payload: dict[str, Any], question: str, history: list[dict[str, s
         "user_question": question[:2000],
     }
     try:
-        configured_model = st.secrets.get("GEMINI_MODEL", "gemini-2.5-flash")
+        configured_model = st.secrets.get("GEMINI_MODEL", "gemini-3.8-flash")
     except Exception:
         configured_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     response = client.models.generate_content(
