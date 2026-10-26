@@ -39,7 +39,7 @@ ANNOTATION_TO_CLASS = {
     "F": "F",
     "/": "Q", "f": "Q", "Q": "Q",
 }
-CLASS_TO_ID = {name: index for index, name in CLASS_NAMES.items()}
+CLASS_TO_ID = {class_name: class_id for class_id, class_name in CLASS_NAMES.items()}
 
 
 @st.cache_resource(show_spinner="Loading the ECG classification model…")
