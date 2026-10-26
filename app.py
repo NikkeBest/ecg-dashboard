@@ -200,7 +200,7 @@ def prepare_record(header_path: Path):
         raise ValueError("No complete 187-sample heartbeat windows could be extracted.")
     model_input = np.asarray(beats, dtype=np.float32)[..., np.newaxis]
     return (
-        record, signal, np.asarray(valid_peaks), model_input,
+        record, signal, np.asarray(peaks), np.asarray(valid_peaks), model_input,
         detector_name, original_fs, lead_name, detector_diagnostic,
         len(peaks), len(peaks) - len(valid_peaks), len(valid_peaks),
     )
@@ -281,7 +281,10 @@ def main() -> None:
 
         if st.button("Analyze recording", type="primary"):
             with st.spinner("Detecting beats and running the model…"):
-                record, signal, peaks, X_input, detector, original_fs, lead_name, detector_diagnostic, detected_count, excluded_count, passed_count = prepare_record(selected_header)
+                (
+                    record, signal, all_peaks, peaks, X_input, detector, original_fs,
+                    lead_name, detector_diagnostic, detected_count, excluded_count, passed_count,
+                ) = prepare_record(selected_header)
                 predictions = np.asarray(model.predict(X_input, verbose=0))
 
             if predictions.ndim != 2 or predictions.shape[0] != len(X_input):
@@ -315,7 +318,7 @@ def main() -> None:
                     beat_mask = [symbol in beat_symbols for symbol in annotations.symbol]
                     annotated_samples = np.asarray(annotations.sample)[beat_mask]
                     tolerance = int(round(0.15 * TRAINING_FS))
-                    matched, extra, missed = compare_peak_positions(peaks, annotated_samples, tolerance)
+                    matched, extra, missed = compare_peak_positions(all_peaks, annotated_samples, tolerance)
                     st.caption(
                         f"Annotation comparison for evaluation only (±150 ms): {len(annotated_samples)} "
                         f"recognized reference beats; {matched} automatic peaks matched, {extra} automatic "
@@ -357,6 +360,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
 
