@@ -9,7 +9,7 @@
 ```toml
 GROQ_API_KEY = "your-real-api-key"
 # Optional. Use a model ID currently available to your Groq account.
-GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_MODEL = "openai/gpt-oss-120b"
 ```
 
 For local development, put the same entries in `.streamlit/secrets.toml` and do not commit that file. The app also accepts `GROQ_API_KEY` and `GROQ_MODEL` environment variables. Never paste your API key into chat, GitHub, screenshots, or issue reports. If exposed, revoke it and create a replacement.
