@@ -18,6 +18,8 @@ from wfdb.processing import xqrs_detect
 from scipy.signal import butter, find_peaks, resample_poly, sosfiltfilt
 import tensorflow as tf
 
+from gemini_analysis import ask_gemini, gemini_available
+
 
 APP_DIR = Path(__file__).resolve().parent
 MODEL_PATH = APP_DIR / "heartbeat_cnn.keras"
@@ -580,6 +582,75 @@ def main() -> None:
                 file_name=f"{csv_stem}_{'reference' if mode.startswith('Reference') else 'automatic'}_predictions.csv",
                 mime="text/csv",
             )
+            counts = {name: int((predictions == idx).sum()) for idx, name in CLASS_NAMES.items()}
+            confidence = np.asarray(probabilities).max(axis=1)
+            rr_seconds = np.diff(np.asarray(results["Time (s)"], dtype=float))
+            rr_seconds = rr_seconds[(rr_seconds > 0.25) & (rr_seconds < 2.5)]
+            estimated_hr = float(60.0 / np.median(rr_seconds)) if len(rr_seconds) else None
+            llm_payload = {
+                "record_name": csv_stem,
+                "mode": "reference_annotation_evaluation" if mode.startswith("Reference") else "automatic_detection",
+                "sampling_rate_hz": float(sampling_rate),
+                "lead_name": str(lead_name),
+                "beats_classified": int(len(predictions)),
+                "predicted_class_counts": counts,
+                "predicted_class_percentages": {name: round(100 * count / max(1, len(predictions)), 2) for name, count in counts.items()},
+                "mean_model_confidence": round(float(confidence.mean()), 4) if len(confidence) else None,
+                "low_confidence_beats_below_0_60": int((confidence < 0.60).sum()),
+                "estimated_heart_rate_bpm_from_detected_peak_intervals": round(estimated_hr, 1) if estimated_hr else None,
+                "detector": data.get("detector", "reference annotations"),
+                "detector_diagnostic": data.get("diagnostic", None),
+                "reference_accuracy": round(float(accuracy), 4) if mode.startswith("Reference") else None,
+                "reference_support_by_class": {name: int((data["y_true"] == idx).sum()) for idx, name in CLASS_NAMES.items()} if mode.startswith("Reference") else None,
+                "limitations": [
+                    "CNN labels are model predictions, not clinical diagnoses.",
+                    "Heart rate may be unreliable if peaks are missed or extra peaks are detected.",
+                    "A single record and overall accuracy do not establish clinical validity.",
+                ],
+            }
+            st.session_state["ecg_llm_payload"] = llm_payload
+            st.session_state["ecg_llm_chat"] = []
+            st.session_state.pop("ecg_llm_report", None)
+
+        if st.session_state.get("ecg_llm_payload"):
+            st.divider()
+            st.header("Gemini ECG Analysis (Research Prototype)")
+            st.caption("Gemini receives summary metrics and model outputs, not the raw ECG waveform or full beat table.")
+            if not gemini_available():
+                st.info("To enable Gemini, add GEMINI_API_KEY to Streamlit Secrets. See README for setup.")
+            payload = st.session_state["ecg_llm_payload"]
+            if st.button("Generate English analysis report", type="primary", key="gemini_report"):
+                with st.spinner("Generating report with Gemini…"):
+                    try:
+                        st.session_state["ecg_llm_report"] = ask_gemini(
+                            payload,
+                            "Write an English report with sections: Summary, Model Output Distribution, Data Quality and Uncertainty, Limitations, and Suggested Next Steps. Only describe supplied metrics. Do not diagnose.",
+                        )
+                    except Exception as exc:
+                        st.error(f"Gemini request failed: {exc}")
+            if st.session_state.get("ecg_llm_report"):
+                st.markdown(st.session_state["ecg_llm_report"])
+                st.download_button("Download Gemini report (.md)", st.session_state["ecg_llm_report"], file_name="ecg_gemini_analysis_report.md", mime="text/markdown")
+            st.subheader("Ask Gemini about these results")
+            if "ecg_llm_chat" not in st.session_state:
+                st.session_state["ecg_llm_chat"] = []
+            for item in st.session_state["ecg_llm_chat"]:
+                with st.chat_message(item["role"]):
+                    st.markdown(item["content"])
+            question = st.chat_input("Ask about class counts, confidence, or detection limitations…")
+            if question:
+                prior_history = list(st.session_state["ecg_llm_chat"])
+                st.session_state["ecg_llm_chat"].append({"role": "user", "content": question})
+                with st.chat_message("user"):
+                    st.markdown(question)
+                with st.chat_message("assistant"):
+                    with st.spinner("Gemini is answering…"):
+                        try:
+                            answer = ask_gemini(payload, question, prior_history)
+                            st.markdown(answer)
+                            st.session_state["ecg_llm_chat"].append({"role": "assistant", "content": answer})
+                        except Exception as exc:
+                            st.error(f"Gemini request failed: {exc}")
     except Exception as exc:
         st.error(str(exc))
 
