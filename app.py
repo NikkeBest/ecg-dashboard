@@ -450,8 +450,8 @@ def main() -> None:
 
                 st.subheader("Reference annotation evaluation")
                 st.caption(
-                    "Reference symbols are WFDB annotation codes mapped using the notebook; "
-                    "model outputs are the five classes N, S, V, F, Q."
+                    "Reference annotation symbols map as N/L/R/e/j→N, A/a/J/S→S, V/E→V, F→F, and /, f, Q→Q. "
+                    "All other annotation symbols are ignored. The CNN output classes, in index order, are N, S, V, F, Q."
                 )
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("Total annotations", f"{data['total_annotations']:,}")
