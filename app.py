@@ -14,6 +14,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 import wfdb
+from wfdb.processing import xqrs_detect
 from scipy.signal import butter, find_peaks, resample_poly, sosfiltfilt
 import tensorflow as tf
 
@@ -142,7 +143,7 @@ def detect_r_peaks(signal: np.ndarray, fs: int) -> tuple[np.ndarray, str, str]:
     if len(signal) < max(20, int(fs * 2)):
         raise ValueError("The selected signal is too short for reliable beat detection.")
     try:
-        peaks = np.asarray(wfdb.processing.xqrs_detect(sig=signal, fs=fs, verbose=False), dtype=int)
+        peaks = np.asarray(xqrs_detect(sig=signal, fs=fs, verbose=False), dtype=int)
         if len(peaks) >= 2:
             return peaks, "WFDB XQRS", "XQRS completed successfully."
         xqrs_diagnostic = f"WFDB XQRS returned only {len(peaks)} peak(s); at least 2 are required."
