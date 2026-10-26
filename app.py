@@ -18,7 +18,7 @@ from wfdb.processing import xqrs_detect
 from scipy.signal import butter, find_peaks, resample_poly, sosfiltfilt
 import tensorflow as tf
 
-from gemini_analysis import ask_gemini, gemini_available
+from groq_analysis import ask_groq, groq_available
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -614,24 +614,24 @@ def main() -> None:
 
         if st.session_state.get("ecg_llm_payload"):
             st.divider()
-            st.header("Gemini ECG Analysis (Research Prototype)")
-            st.caption("Gemini receives summary metrics and model outputs, not the raw ECG waveform or full beat table.")
-            if not gemini_available():
-                st.info("To enable Gemini, add GEMINI_API_KEY to Streamlit Secrets. See README for setup.")
+            st.header("Groq ECG Analysis (Research Prototype)")
+            st.caption("Groq receives summary metrics and model outputs, not the raw ECG waveform or full beat table.")
+            if not groq_available():
+                st.info("To enable Groq, add GROQ_API_KEY to Streamlit Secrets. See GROQ_SETUP.md for setup.")
             payload = st.session_state["ecg_llm_payload"]
             if st.button("Generate English analysis report", type="primary", key="gemini_report"):
                 with st.spinner("Generating report with Gemini…"):
                     try:
-                        st.session_state["ecg_llm_report"] = ask_gemini(
+                        st.session_state["ecg_llm_report"] = ask_groq(
                             payload,
                             "Write an English report with sections: Summary, Model Output Distribution, Data Quality and Uncertainty, Limitations, and Suggested Next Steps. Only describe supplied metrics. Do not diagnose.",
                         )
                     except Exception as exc:
-                        st.error(f"Gemini request failed: {exc}")
+                        st.error(f"Groq request failed: {exc}")
             if st.session_state.get("ecg_llm_report"):
                 st.markdown(st.session_state["ecg_llm_report"])
-                st.download_button("Download Gemini report (.md)", st.session_state["ecg_llm_report"], file_name="ecg_gemini_analysis_report.md", mime="text/markdown")
-            st.subheader("Ask Gemini about these results")
+                st.download_button("Download Groq report (.md)", st.session_state["ecg_llm_report"], file_name="ecg_groq_analysis_report.md", mime="text/markdown")
+            st.subheader("Ask Groq about these results")
             if "ecg_llm_chat" not in st.session_state:
                 st.session_state["ecg_llm_chat"] = []
             for item in st.session_state["ecg_llm_chat"]:
@@ -644,13 +644,13 @@ def main() -> None:
                 with st.chat_message("user"):
                     st.markdown(question)
                 with st.chat_message("assistant"):
-                    with st.spinner("Gemini is answering…"):
+                    with st.spinner("Groq is answering…"):
                         try:
-                            answer = ask_gemini(payload, question, prior_history)
+                            answer = ask_groq(payload, question, prior_history)
                             st.markdown(answer)
                             st.session_state["ecg_llm_chat"].append({"role": "assistant", "content": answer})
                         except Exception as exc:
-                            st.error(f"Gemini request failed: {exc}")
+                            st.error(f"Groq request failed: {exc}")
     except Exception as exc:
         st.error(str(exc))
 
