@@ -59,9 +59,9 @@ def ask_groq(payload: dict[str, Any], question: str, history: list[dict[str, str
         "user_question": question[:2000],
     }
     try:
-        configured_model = st.secrets.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+        configured_model = st.secrets.get("GROQ_MODEL", "openai/gpt-oss-120b")
     except Exception:
-        configured_model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+        configured_model = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
     last_error = None
     for attempt in range(4):
