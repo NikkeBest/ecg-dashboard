@@ -619,8 +619,8 @@ def main() -> None:
             if not groq_available():
                 st.info("To enable Groq, add GROQ_API_KEY to Streamlit Secrets. See GROQ_SETUP.md for setup.")
             payload = st.session_state["ecg_llm_payload"]
-            if st.button("Generate English analysis report", type="primary", key="gemini_report"):
-                with st.spinner("Generating report with Gemini…"):
+            if st.button("Generate English analysis report", type="primary", key="groq_report"):
+                with st.spinner("Generating report with Groq…"):
                     try:
                         st.session_state["ecg_llm_report"] = ask_groq(
                             payload,
