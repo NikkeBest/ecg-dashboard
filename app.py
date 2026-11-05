@@ -1,5 +1,4 @@
 """Streamlit dashboard for beat-level ECG classification with a Keras model."""
-
 from __future__ import annotations
 
 import math
@@ -19,6 +18,8 @@ from scipy.signal import butter, find_peaks, resample_poly, sosfiltfilt
 import tensorflow as tf
 
 from groq_analysis import ask_groq, groq_available
+from api_client import register_user, login_user
+import requests
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -348,320 +349,168 @@ def _classification_metrics(y_true: np.ndarray, y_pred: np.ndarray):
     return matrix, report, accuracy
 
 
-def main() -> None:
-    st.set_page_config(page_title="ECG Heartbeat Classification", page_icon="💓", layout="wide")
-    st.title("💓 ECG Heartbeat Classification")
-    st.write(
-        "Compare annotation-centered evaluation with deployment-style automatic R-peak detection "
-        "using the same trained CNN and shared heartbeat preprocessing."
-    )
+def _get_user_from_login(result: dict) -> dict:
+    """Accept the API's token response shape and extract the public user object."""
+    user = result.get("user") if isinstance(result, dict) else None
+    if isinstance(user, dict):
+        return user
+    if isinstance(result, dict) and ("email" in result or "role" in result):
+        return result
+    return {}
+
+
+def _auth_screen() -> None:
+    st.title("💓 ECG Heartbeat Monitoring")
+    st.caption("Sign in to access the ECG research dashboard.")
+    login_tab, register_tab = st.tabs(["Login", "Register"])
+
+    with login_tab:
+        with st.form("login_form"):
+            email = st.text_input("Email", key="auth_login_email")
+            password = st.text_input("Password", type="password", key="auth_login_password")
+            submitted = st.form_submit_button("Login", type="primary")
+        if submitted:
+            if not email.strip() or not password:
+                st.error("Enter your email and password.")
+            else:
+                try:
+                    result = login_user(email.strip(), password)
+                    if not isinstance(result, dict):
+                        raise ValueError("The login API returned an unexpected response.")
+                    token = result.get("access_token") or result.get("token")
+                    user = _get_user_from_login(result)
+                    if not token:
+                        st.error("Login response did not include an access token. Check the FastAPI response schema.")
+                    elif not user:
+                        st.error("Login succeeded, but the response did not include user details. Check the FastAPI TokenResponse schema.")
+                    else:
+                        st.session_state["auth_token"] = token
+                        st.session_state["auth_user"] = user
+                        st.rerun()
+                except requests.RequestException as exc:
+                    detail = getattr(getattr(exc, "response", None), "text", "") or str(exc)
+                    st.error(f"Login failed: {detail}")
+                except (ValueError, KeyError) as exc:
+                    st.error(str(exc))
+
+    with register_tab:
+        with st.form("register_form"):
+            full_name = st.text_input("Full name", key="auth_register_name")
+            new_email = st.text_input("Email", key="auth_register_email")
+            new_password = st.text_input("Password (at least 8 characters)", type="password", key="auth_register_password")
+            role = st.selectbox("Register as", ["patient", "doctor"], key="auth_register_role")
+            submitted = st.form_submit_button("Create account")
+        if submitted:
+            if not full_name.strip() or not new_email.strip() or not new_password:
+                st.error("Complete all registration fields.")
+            elif len(new_password) < 8:
+                st.error("Password must contain at least 8 characters.")
+            else:
+                try:
+                    register_user(full_name.strip(), new_email.strip(), new_password, role)
+                    st.success("Account created. Please sign in using the Login tab.")
+                except requests.RequestException as exc:
+                    detail = getattr(getattr(exc, "response", None), "text", "") or str(exc)
+                    st.error(f"Registration failed: {detail}")
+
+
+def _patient_dashboard(user_name: str) -> None:
+    """Patient-facing dashboard. Live device and history data are not wired yet."""
+    st.title("💓 My ECG Dashboard")
+    st.write(f"Welcome, {user_name}.")
+    st.caption("View your monitoring status, ECG history, and reviewed results.")
     st.warning(
-        "Research/student prototype only — not clinically validated and not a medical diagnosis. "
-        "Automatic peak positions can differ from reference annotations and affect predictions."
+        "This is a research prototype, not a medical device or diagnostic service. "
+        "No ECG device is currently connected to this dashboard. Do not use it for emergencies."
     )
 
-    if not MODEL_PATH.is_file():
-        st.error(f"Model file not found: {MODEL_PATH.name}. Put it beside app.py in the GitHub repository.")
-        st.stop()
-    try:
-        model = load_model(str(MODEL_PATH))
-    except Exception as exc:
-        st.error(f"Could not load {MODEL_PATH.name}: {exc}")
-        st.stop()
-
-    output_shape = model.output_shape
-    if isinstance(output_shape, list):
-        if len(output_shape) != 1:
-            st.error("The model must have one output with five classes.")
-            st.stop()
-        output_shape = output_shape[0]
-    if not output_shape or output_shape[-1] != 5:
-        st.error(f"Expected a five-class model output; model output shape is {output_shape}.")
-        st.stop()
-
-    mode = st.radio(
-        "Inference mode",
-        ["Reference Annotation Mode (evaluation)", "Automatic Detection Mode (deployment)"],
-        horizontal=True,
+    overview, live, history, results, doctor = st.tabs(
+        ["Overview", "Live Monitoring", "ECG History", "My Results", "My Doctor"]
     )
-    if mode.startswith("Reference"):
+    with overview:
+        a, b, c = st.columns(3)
+        a.metric("Device status", "Not connected")
+        b.metric("Latest heart rate", "-- BPM")
+        c.metric("Latest recording", "No recordings")
+        st.subheader("Monitoring")
         st.info(
-            "Requires the matching .hea, .dat, and .atr. Uses the first signal lead and annotation "
-            "sample positions directly; XQRS/SciPy detection is not run. Unsupported annotation symbols "
-            "are reported and skipped, as in training."
+            "Your ECG device has not been connected yet. Once device data ingestion is implemented, "
+            "your monitoring status and latest ECG information will appear here."
         )
-    else:
-        st.info(
-            "Requires the .hea and its referenced signal file (normally .dat). XQRS detects beats "
-            "automatically; the approximate SciPy fallback is used only if XQRS fails or returns fewer "
-            "than two peaks. An optional matching .atr is used only for evaluation comparison."
+        st.subheader("Getting started")
+        st.markdown(
+            "1. Have your ECG monitoring device registered by your care team.\n"
+            "2. Connect the device through the supported patient gateway.\n"
+            "3. Keep this page open to view monitoring updates when live streaming is enabled."
         )
+    with live:
+        st.subheader("Live ECG")
+        st.info("Waiting for a registered ECG device. Live waveform streaming is not connected yet.")
+        st.caption("No live signal is being received. The display will become active after hardware ingestion is implemented.")
+    with history:
+        st.subheader("My ECG recordings")
+        st.info("You do not have any saved ECG recordings yet.")
+    with results:
+        st.subheader("My ECG results")
+        st.info("There are no reviewed results available yet. AI heartbeat classifications will appear here after recordings are processed and saved.")
+        st.caption("Heartbeat classifications are research outputs, not diagnoses. A normal result does not rule out a health problem.")
+    with doctor:
+        st.subheader("My care team")
+        st.info("No doctor has been linked to your account yet. Patient-doctor assignment is not implemented in this version.")
 
-    uploaded_files = st.file_uploader(
-        "WFDB files (.hea and matching signal file; add .atr for reference evaluation), or a ZIP bundle",
-        type=["hea", "dat", "mat", "atr", "xyz", "zip"],
-        accept_multiple_files=True,
+
+def _doctor_dashboard(user_name: str) -> None:
+    """Doctor-facing dashboard with honest empty states until clinical workflows exist."""
+    st.title("🩺 Doctor Dashboard")
+    st.write(f"Welcome, {user_name}.")
+    st.caption("Review assigned patients and their ECG monitoring information.")
+    st.warning(
+        "This is a research prototype, not a clinically validated diagnostic system. "
+        "Do not use it to make treatment decisions or manage emergencies."
     )
-    if not uploaded_files:
-        st.info("Upload the files required for the selected mode to begin.")
+    patients, monitoring, reviews, notes = st.tabs(
+        ["My Patients", "Live Monitoring", "ECG Reviews", "Clinical Notes"]
+    )
+    with patients:
+        st.subheader("Assigned patients")
+        st.info("No patients are assigned to your account yet. Patient assignment and listing are not connected to the interface yet.")
+    with monitoring:
+        st.subheader("Patient monitoring")
+        st.info("Live patient monitoring will be available after device ingestion and patient assignment are implemented.")
+    with reviews:
+        st.subheader("ECG recordings awaiting review")
+        st.info("There are no ECG recordings awaiting review.")
+    with notes:
+        st.subheader("Clinical notes")
+        st.info("Clinical notes will be available after patient-record access and note-saving workflows are connected.")
+
+
+def main() -> None:
+    st.set_page_config(page_title="ECG Heartbeat Monitoring", page_icon="💓", layout="wide")
+
+    user = st.session_state.get("auth_user")
+    if not user:
+        _auth_screen()
         return
 
-    if "ecg_upload_dir" not in st.session_state:
-        st.session_state.ecg_upload_dir = tempfile.mkdtemp(prefix="ecg_upload_")
-    root = Path(st.session_state.ecg_upload_dir)
-    root.mkdir(parents=True, exist_ok=True)
-    try:
-        for child in root.iterdir():
-            if child.is_dir():
-                shutil.rmtree(child)
-            else:
-                child.unlink()
+    user_name = user.get("full_name") or user.get("email") or "User"
+    user_role = str(user.get("role", "patient")).lower()
+    with st.sidebar:
+        st.title("ECG Monitoring")
+        st.write(f"**{user_name}**")
+        st.caption(f"Account: {user_role.title()}")
+        st.divider()
+        if st.button("Log out", key="auth_logout", use_container_width=True):
+            st.session_state.pop("auth_user", None)
+            st.session_state.pop("auth_token", None)
+            st.rerun()
+        st.caption("ECG Heartbeat Monitoring · Research prototype")
 
-        saved = _save_uploads(uploaded_files, root)
-        headers = _find_header_files(saved, root)
-        if not headers:
-            raise ValueError("No .hea file was found. Upload it with its signal file or use a ZIP bundle.")
-
-        header_options = [path.relative_to(root).as_posix() for path in headers]
-        selected_name = st.selectbox("Choose ECG record", header_options)
-        selected_header = root.joinpath(*Path(selected_name).parts)
-        if st.button(
-            "Run reference evaluation" if mode.startswith("Reference") else "Analyze automatically",
-            type="primary",
-        ):
-            if mode.startswith("Reference"):
-                try:
-                    data = prepare_reference_record(selected_header)
-                except ValueError as exc:
-                    st.error(str(exc))
-                    return
-                if len(data["X"]) == 0:
-                    st.error(
-                        f"No eligible labeled beats: {data['total_annotations']} total annotations, "
-                        f"{data['supported_annotations']} supported beat annotations, "
-                        f"{data['excluded']} excluded at the signal boundaries."
-                    )
-                    return
-                with st.spinner("Predicting annotation-centered beats…"):
-                    probabilities = np.asarray(model.predict(data["X"], verbose=0))
-                if probabilities.ndim != 2 or probabilities.shape != (len(data["X"]), 5):
-                    raise ValueError(f"Expected prediction shape ({len(data['X'])}, 5); got {probabilities.shape}.")
-                if not np.isfinite(probabilities).all():
-                    raise ValueError("The CNN returned NaN or infinite prediction values.")
-                predictions = probabilities.argmax(axis=1)
-                matrix, report, accuracy = _classification_metrics(data["y_true"], predictions)
-
-                st.subheader("Reference annotation evaluation")
-                st.caption(
-                    "Reference annotation symbols map as N/L/R/e/j→N, A/a/J/S→S, V/E→V, F→F, and /, f, Q→Q. "
-                    "All other annotation symbols are ignored. The CNN output classes, in index order, are N, S, V, F, Q."
-                )
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("Total annotations", f"{data['total_annotations']:,}")
-                c2.metric("Supported beat annotations", f"{data['supported_annotations']:,}")
-                c3.metric("Eligible beats", f"{len(data['X']):,}")
-                c4.metric("Excluded: incomplete window", f"{data['excluded']:,}")
-                st.caption(
-                    f"Ignored unsupported/non-beat annotation symbols: {data['ignored_annotations']:,}. "
-                    f"Lead used: {data['lead_name']} at {data['fs']:g} Hz."
-                )
-                st.metric("Accuracy on eligible annotated beats", f"{accuracy:.4f}")
-                class_counts = pd.Series(
-                    [CLASS_NAMES[int(i)] for i in predictions]
-                ).value_counts().reindex(list(CLASS_NAMES.values()), fill_value=0)
-                st.subheader("Predicted class distribution")
-                st.plotly_chart(
-                    px.bar(
-                        pd.DataFrame({"Class": class_counts.index, "Beats": class_counts.values}),
-                        x="Class", y="Beats", color="Class",
-                    ),
-                    width="stretch",
-                )
-                st.subheader("Confusion matrix")
-                st.caption("Rows are reference labels; columns are CNN predictions.")
-                st.dataframe(
-                    pd.DataFrame(matrix, index=list(CLASS_NAMES.values()), columns=list(CLASS_NAMES.values()))
-                    .rename_axis("Reference"),
-                    width="stretch",
-                )
-                st.subheader("Classification report")
-                st.dataframe(report, width="stretch", hide_index=True)
-                results = pd.DataFrame({
-                    "Beat": np.arange(1, len(predictions) + 1),
-                    "Time (s)": data["centers"] / TRAINING_FS,
-                    "Reference annotation symbol": data["symbols"],
-                    "Reference class": [CLASS_NAMES[int(i)] for i in data["y_true"]],
-                    "Predicted class": [CLASS_NAMES[int(i)] for i in predictions],
-                    "Correct": data["y_true"] == predictions,
-                    "Confidence": probabilities.max(axis=1),
-                })
-                signal = data["signal"]
-                lead_name = data["lead_name"]
-                sampling_rate = data["fs"]
-                csv_stem = selected_header.stem
-            else:
-                try:
-                    data = prepare_automatic_record(selected_header)
-                except ValueError as exc:
-                    st.error(str(exc))
-                    return
-                with st.spinner("Predicting automatically detected beats…"):
-                    probabilities = np.asarray(model.predict(data["X"], verbose=0))
-                if probabilities.ndim != 2 or probabilities.shape != (len(data["X"]), 5):
-                    raise ValueError(f"Expected prediction shape ({len(data['X'])}, 5); got {probabilities.shape}.")
-                if not np.isfinite(probabilities).all():
-                    raise ValueError("The CNN returned NaN or infinite prediction values.")
-                predictions = probabilities.argmax(axis=1)
-                st.subheader("Automatic detection results")
-                if data["detector"] != "WFDB XQRS":
-                    st.warning(
-                        f"{data['diagnostic']} The app used the documented approximate SciPy fallback "
-                        f"(5–{min(20.0, TRAINING_FS * 0.45):g} Hz band-pass, absolute-signal local maxima, "
-                        "250 ms minimum spacing). Secondary waveform peaks can be counted; review detections."
-                    )
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("Detector", data["detector"])
-                c2.metric("Detected peaks", f"{data['detected_count']:,}")
-                c3.metric("Valid 187-sample windows", f"{data['valid_count']:,}")
-                c4.metric("Excluded: incomplete window", f"{data['excluded']:,}")
-                class_counts = pd.Series(
-                    [CLASS_NAMES[int(i)] for i in predictions]
-                ).value_counts().reindex(list(CLASS_NAMES.values()), fill_value=0)
-                st.subheader("Predicted class distribution")
-                st.plotly_chart(
-                    px.bar(
-                        pd.DataFrame({"Class": class_counts.index, "Beats": class_counts.values}),
-                        x="Class", y="Beats", color="Class",
-                    ),
-                    width="stretch",
-                )
-
-                atr_path = _matching_sidecar(selected_header, ".atr")
-                if atr_path is not None:
-                    try:
-                        annotation = wfdb.rdann(str(selected_header.with_suffix("")), "atr")
-                        reference_centers = np.asarray([
-                            int(sample) for sample, symbol in zip(annotation.sample, annotation.symbol)
-                            if symbol in ANNOTATION_TO_CLASS
-                        ], dtype=int)
-                        tolerance = int(round(0.15 * TRAINING_FS))
-                        matched, extra, missed = compare_peak_positions(
-                            data["all_peaks"], reference_centers, tolerance
-                        )
-                        st.caption(
-                            f"Optional .atr evaluation only (one-to-one, ±150 ms): "
-                            f"{matched:,} matched, {missed:,} reference beats missed, "
-                            f"{extra:,} extra detections. Annotations did not generate these predictions."
-                        )
-                    except Exception as exc:
-                        st.warning(f"Could not read the optional .atr file for comparison: {exc}")
-
-                results = pd.DataFrame({
-                    "Beat": np.arange(1, len(predictions) + 1),
-                    "Time (s)": data["valid_peaks"] / TRAINING_FS,
-                    "Class": [CLASS_NAMES[int(i)] for i in predictions],
-                    "Confidence": probabilities.max(axis=1),
-                })
-                signal = data["signal"]
-                lead_name = data["lead_name"]
-                sampling_rate = TRAINING_FS
-                csv_stem = selected_header.stem
-
-            st.subheader(f"ECG waveform — {lead_name}")
-            plot_limit = min(len(signal), int(sampling_rate * 30))
-            signal_frame = pd.DataFrame({
-                "Time (s)": np.arange(plot_limit) / sampling_rate,
-                "Amplitude": signal[:plot_limit],
-            })
-            st.plotly_chart(px.line(signal_frame, x="Time (s)", y="Amplitude"), width="stretch")
-            st.subheader("Per-beat results")
-            st.dataframe(results, width="stretch", hide_index=True)
-            st.download_button(
-                "Download predictions (CSV)",
-                results.to_csv(index=False).encode("utf-8"),
-                file_name=f"{csv_stem}_{'reference' if mode.startswith('Reference') else 'automatic'}_predictions.csv",
-                mime="text/csv",
-            )
-            counts = {name: int((predictions == idx).sum()) for idx, name in CLASS_NAMES.items()}
-            confidence = np.asarray(probabilities).max(axis=1)
-            rr_seconds = np.diff(np.asarray(results["Time (s)"], dtype=float))
-            rr_seconds = rr_seconds[(rr_seconds > 0.25) & (rr_seconds < 2.5)]
-            estimated_hr = float(60.0 / np.median(rr_seconds)) if len(rr_seconds) else None
-            llm_payload = {
-                "record_name": csv_stem,
-                "mode": "reference_annotation_evaluation" if mode.startswith("Reference") else "automatic_detection",
-                "sampling_rate_hz": float(sampling_rate),
-                "lead_name": str(lead_name),
-                "beats_classified": int(len(predictions)),
-                "predicted_class_counts": counts,
-                "predicted_class_percentages": {name: round(100 * count / max(1, len(predictions)), 2) for name, count in counts.items()},
-                "mean_model_confidence": round(float(confidence.mean()), 4) if len(confidence) else None,
-                "low_confidence_beats_below_0_60": int((confidence < 0.60).sum()),
-                "estimated_heart_rate_bpm_from_detected_peak_intervals": round(estimated_hr, 1) if estimated_hr else None,
-                "detector": data.get("detector", "reference annotations"),
-                "detector_diagnostic": data.get("diagnostic", None),
-                "reference_accuracy": round(float(accuracy), 4) if mode.startswith("Reference") else None,
-                "reference_support_by_class": {name: int((data["y_true"] == idx).sum()) for idx, name in CLASS_NAMES.items()} if mode.startswith("Reference") else None,
-                "limitations": [
-                    "CNN labels are model predictions, not clinical diagnoses.",
-                    "Heart rate may be unreliable if peaks are missed or extra peaks are detected.",
-                    "A single record and overall accuracy do not establish clinical validity.",
-                ],
-            }
-            st.session_state["ecg_llm_payload"] = llm_payload
-            st.session_state["ecg_llm_chat"] = []
-            st.session_state.pop("ecg_llm_report", None)
-
-        if st.session_state.get("ecg_llm_payload"):
-            st.divider()
-            st.header("Groq ECG Analysis (Research Prototype)")
-            st.caption("Healthcare support summary: dominant model finding, possible concerns to verify, and practical next steps for doctors or nurses. Groq receives summary metrics and model outputs, not the raw ECG waveform or full beat table.")
-            if not groq_available():
-                st.info("To enable Groq, add GROQ_API_KEY to Streamlit Secrets. See GROQ_SETUP.md for setup.")
-            payload = st.session_state["ecg_llm_payload"]
-            if st.button("Generate English analysis report", type="primary", key="groq_report"):
-                with st.spinner("Generating report with Groq…"):
-                    try:
-                        st.session_state["ecg_llm_report"] = ask_groq(
-                            payload,
-                            "Write an English ECG results interpretation and care-support summary for a doctor or nurse. Use sections: 1) Main Finding (state which predicted class is most common, with count and percentage), 2) Other Notable Model Outputs, 3) Potential Clinical Concerns to Verify (explain cautiously what the labels may warrant checking, without presenting them as confirmed abnormalities), 4) Practical Suggestions for the Healthcare User (review relevant waveform segments, correlate with symptoms/history and existing clinical observations, check signal/peak quality, and escalate according to established clinical protocols if the patient has concerning symptoms), and 5) Limitations. Base every statement on supplied metrics. Explain that model predictions alone cannot establish a patient-specific threat or diagnosis; the raw ECG waveform and patient context were not supplied to the LLM. If non-N classes or low-confidence beats are present, recommend checking those segments. If no reference annotations are available, state that correctness is unknown. Do not prescribe treatment or invent clinical findings. Do not provide a false sense of reassurance from a high mean confidence score.",
-                        )
-                    except Exception as exc:
-                        st.error(f"Groq request failed: {exc}")
-            if st.session_state.get("ecg_llm_report"):
-                st.markdown(st.session_state["ecg_llm_report"])
-                st.download_button("Download Groq report (.md)", st.session_state["ecg_llm_report"], file_name="ecg_groq_analysis_report.md", mime="text/markdown")
-            st.subheader("Ask about findings and next steps")
-            if "ecg_llm_chat" not in st.session_state:
-                st.session_state["ecg_llm_chat"] = []
-            for item in st.session_state["ecg_llm_chat"]:
-                with st.chat_message(item["role"]):
-                    st.markdown(item["content"])
-            question = st.chat_input("Ask what the dominant result means, what should be verified, or what next steps to consider…")
-            if question:
-                prior_history = list(st.session_state["ecg_llm_chat"])
-                st.session_state["ecg_llm_chat"].append({"role": "user", "content": question})
-                with st.chat_message("user"):
-                    st.markdown(question)
-                with st.chat_message("assistant"):
-                    with st.spinner("Groq is answering…"):
-                        try:
-                            answer = ask_groq(payload, question, prior_history)
-                            st.markdown(answer)
-                            st.session_state["ecg_llm_chat"].append({"role": "assistant", "content": answer})
-                        except Exception as exc:
-                            st.error(f"Groq request failed: {exc}")
-    except Exception as exc:
-        st.error(str(exc))
+    if user_role == "doctor":
+        _doctor_dashboard(user_name)
+    else:
+        _patient_dashboard(user_name)
 
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
