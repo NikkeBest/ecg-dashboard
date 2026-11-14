@@ -988,7 +988,7 @@ def main() -> None:
         try:
             patient_history = get_recordings(patient_token)
             if patient_history:
-                history_frame = pd.DataFrame(history)
+                history_frame = pd.DataFrame(patient_history)
 
                 styled_history = history_frame.style.set_table_styles([
                 {
