@@ -1177,32 +1177,10 @@ def main() -> None:
             if st.button("Generate English analysis report", type="primary", key="groq_report"):
                 with st.spinner("Generating report with Groq…"):
                     try:
-                        report_text = ask_groq(
+                        st.session_state["ecg_llm_report"] = ask_groq(
                             payload,
-                            "Write an English ECG results interpretation and care-support summary for a doctor or nurse. Use exactly these five numbered sections, with meaningful content under every heading: 1) Main Finding (state which predicted class is most common, with count and percentage), 2) Other Notable Model Outputs, 3) Potential Clinical Concerns to Verify (explain cautiously what the labels may warrant checking, without presenting them as confirmed abnormalities), 4) Practical Suggestions for the Healthcare User (review relevant waveform segments, correlate with symptoms/history and existing clinical observations, check signal/peak quality, and escalate according to established clinical protocols if the patient has concerning symptoms), and 5) Limitations. Under section 5, explicitly state that this is a CNN research prototype; predictions are not diagnoses; the LLM received summary metrics only, not the raw ECG waveform or patient context; peak detection may miss or add beats; prediction correctness cannot be established without independently verified reference labels; and clinical validity is not established by one recording or overall accuracy. Base every statement on supplied metrics. If non-N classes or low-confidence beats are present, recommend checking those segments. Do not prescribe treatment or invent clinical findings. Do not provide a false sense of reassurance from a high mean confidence score.",
+                            "Write an English ECG results interpretation and care-support summary for a doctor or nurse. Use sections: 1) Main Finding (state which predicted class is most common, with count and percentage), 2) Other Notable Model Outputs, 3) Potential Clinical Concerns to Verify (explain cautiously what the labels may warrant checking, without presenting them as confirmed abnormalities), 4) Practical Suggestions for the Healthcare User (review relevant waveform segments, correlate with symptoms/history and existing clinical observations, check signal/peak quality, and escalate according to established clinical protocols if the patient has concerning symptoms), and 5) Limitations. Base every statement on supplied metrics. Explain that model predictions alone cannot establish a patient-specific threat or diagnosis; the raw ECG waveform and patient context were not supplied to the LLM. If non-N classes or low-confidence beats are present, recommend checking those segments. Prediction correctness cannot be established without independently verified reference labels. Do not prescribe treatment or invent clinical findings. Do not provide a false sense of reassurance from a high mean confidence score.",
                         )
-                        # Ensure section 5 is visible even if the language model omits it
-                        # or returns an empty heading.
-                        import re
-                        limitations_heading = re.search(
-                            r"(?im)^\\s*(?:#{1,6}\\s*)?(?:5[.)]\\s*)?limitations\\s*:?[ \\t]*$",
-                            report_text,
-                        )
-                        limitations_text = ""
-                        if limitations_heading:
-                            tail = report_text[limitations_heading.end():]
-                            next_section = re.search(r"(?m)^\\s*(?:#{1,6}\\s*|[1-5][.)]\\s+)", tail)
-                            limitations_text = tail[:next_section.start()] if next_section else tail
-                        if not limitations_heading or not limitations_text.strip():
-                            report_text = report_text.rstrip() + (
-                                "\\n\\n### 5) Limitations\\n"
-                                "- This is a research prototype; CNN predictions are not clinical diagnoses.\\n"
-                                "- Groq received summary metrics only, not the raw ECG waveform or full patient context.\\n"
-                                "- Automatic peak detection may miss beats or count extra peaks, affecting the results.\\n"
-                                "- Prediction correctness cannot be established without independently verified reference labels.\\n"
-                                "- A single recording or overall model accuracy does not establish clinical validity."
-                            )
-                        st.session_state["ecg_llm_report"] = report_text
                     except Exception as exc:
                         st.error(f"Groq request failed: {exc}")
             if st.session_state.get("ecg_llm_report"):
