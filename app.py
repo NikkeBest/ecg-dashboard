@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from datetime import datetime
 import shutil
 import tempfile
 import zipfile
@@ -550,10 +551,13 @@ def _render_patient_doctor_chat(token: str, patient_id: int, recording_options: 
             st.info("No messages in this conversation yet.")
         for msg in messages:
             mine = int(msg.get("sender_id", -1)) == int(st.session_state.get("auth_user", {}).get("id", -2))
-            who = "You" if mine else ("Doctor" if key_prefix == "patient_chat" else "Patient")
             created = msg.get("created_at") or ""
+            try:
+                created = datetime.fromisoformat(str(created).replace("Z", "+00:00")).strftime("%d %b %Y, %I:%M %p")
+            except (TypeError, ValueError):
+                created = str(created)
             with st.chat_message("user" if mine else "assistant"):
-                st.caption(f"{who} · {created}")
+                st.caption(created)
                 st.write(msg.get("message_text", ""))
         with st.form(f"{key_prefix}_send_form", clear_on_submit=True):
             message = st.text_area("Write a message", max_chars=5000, key=f"{key_prefix}_message")
