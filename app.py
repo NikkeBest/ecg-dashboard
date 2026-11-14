@@ -154,10 +154,10 @@ def _generate_role_report(payload: dict, role: str) -> str:
             "Summary of model outputs; Class distribution and confidence; Items to verify; "
             "Suggested review steps; Limitations. Identify the dominant predicted class "
             "and relevant non-N classes or low-confidence predictions. Recommend review "
-            "of the corresponding ECG waveform segments, signal quality, peak alignment, "
+            "of the corresponding ECG signal waveform segments, signal quality, peak alignment, "
             "symptoms, history and other clinical information. Do not diagnose, prescribe, "
             "or infer patient-specific risk from class labels or confidence alone. State "
-            "that the AI received saved prediction metrics, not the raw ECG waveform."
+            "that the AI received saved prediction metrics, not the raw ECG signal waveform."
         )
     else:
         raise ValueError("AI report role must be 'patient' or 'doctor'.")
@@ -480,15 +480,15 @@ def _get_user_from_login(result: dict) -> dict:
 
 
 def _auth_screen() -> None:
-    st.title("💓 ECG Heartbeat Monitoring")
-    st.caption("Sign in to access the ECG research dashboard.")
-    login_tab, register_tab = st.tabs(["Login", "Register"])
+    st.title("💓 ECG Monitoring Platform")
+    st.caption("Sign in to manage ECG records, AI insights, and care-team communication.")
+    login_tab, register_tab = st.tabs(["Sign in", "Submit registration"])
 
     with login_tab:
         with st.form("login_form"):
             email = st.text_input("Email", key="auth_login_email")
             password = st.text_input("Password", type="password", key="auth_login_password")
-            submitted = st.form_submit_button("Login", type="primary")
+            submitted = st.form_submit_button("Sign in", type="primary")
         if submitted:
             if not email.strip() or not password:
                 st.error("Enter your email and password.")
@@ -500,16 +500,16 @@ def _auth_screen() -> None:
                     token = result.get("access_token") or result.get("token")
                     user = _get_user_from_login(result)
                     if not token:
-                        st.error("Login response did not include an access token. Check the FastAPI response schema.")
+                        st.error("Sign in response did not include an access token. Check the FastAPI response schema.")
                     elif not user:
-                        st.error("Login succeeded, but the response did not include user details. Check the FastAPI TokenResponse schema.")
+                        st.error("Sign in succeeded, but the response did not include user details. Check the FastAPI TokenResponse schema.")
                     else:
                         st.session_state["auth_token"] = token
                         st.session_state["auth_user"] = user
                         st.rerun()
                 except requests.RequestException as exc:
                     detail = getattr(getattr(exc, "response", None), "text", "") or str(exc)
-                    st.error(f"Login failed: {detail}")
+                    st.error(f"Sign in failed: {detail}")
                 except (ValueError, KeyError) as exc:
                     st.error(str(exc))
 
@@ -518,8 +518,8 @@ def _auth_screen() -> None:
             full_name = st.text_input("Full name", key="auth_register_name")
             new_email = st.text_input("Email", key="auth_register_email")
             new_password = st.text_input("Password (at least 8 characters)", type="password", key="auth_register_password")
-            role = st.selectbox("Register as", ["patient", "doctor"], key="auth_register_role")
-            submitted = st.form_submit_button("Create account")
+            role = st.selectbox("Submit registration as", ["patient", "doctor"], key="auth_register_role")
+            submitted = st.form_submit_button("Submit registration")
         if submitted:
             if not full_name.strip() or not new_email.strip() or not new_password:
                 st.error("Complete all registration fields.")
@@ -537,12 +537,12 @@ def _auth_screen() -> None:
 
 def _render_patient_doctor_chat(token: str, patient_id: int, recording_options: list[dict], key_prefix: str) -> None:
     """Render a persistent chat for the authenticated patient-doctor pair."""
-    st.subheader("Messages with your doctor" if key_prefix == "patient_chat" else "Messages with patient")
-    choices = {"General conversation": None}
+    st.subheader("Care team messages" if key_prefix == "patient_chat" else "Patient messages")
+    choices = {"General messages": None}
     for item in recording_options:
         rid = int(item.get("id"))
         choices[f"ECG #{rid} — {item.get('file_name') or 'ECG recording'}"] = rid
-    selected = st.selectbox("Conversation", list(choices), key=f"{key_prefix}_recording")
+    selected = st.selectbox("Message thread", list(choices), key=f"{key_prefix}_recording")
     recording_id = choices[selected]
     try:
         messages = get_chat_messages(token, patient_id, recording_id)
@@ -556,15 +556,15 @@ def _render_patient_doctor_chat(token: str, patient_id: int, recording_options: 
                 st.caption(f"{who} · {created}")
                 st.write(msg.get("message_text", ""))
         with st.form(f"{key_prefix}_send_form", clear_on_submit=True):
-            message = st.text_area("Write a message", max_chars=5000, key=f"{key_prefix}_message")
-            submitted = st.form_submit_button("Send message")
+            message = st.text_area("Type your message", max_chars=5000, key=f"{key_prefix}_message")
+            submitted = st.form_submit_button("Send")
         if submitted:
             if not message.strip():
                 st.warning("Please enter a message before sending.")
             else:
                 send_chat_message(token, patient_id, message.strip(), recording_id)
                 st.rerun()
-        if st.button("Refresh messages", key=f"{key_prefix}_refresh"):
+        if st.button("Refresh conversation", key=f"{key_prefix}_refresh"):
             st.rerun()
     except requests.RequestException as exc:
         detail = getattr(getattr(exc, "response", None), "text", "") or str(exc)
@@ -594,13 +594,13 @@ def main() -> None:
 
     # Admin dashboard: account approvals and user directory.
     if user_role == "admin":
-        st.title("Administrator Dashboard")
-        st.caption("Review patient and doctor registrations and manage approved accounts.")
+        st.title("Administration")
+        st.caption("Manage account approvals, user access, and patient–doctor assignments.")
         api_url = os.getenv("API_URL", "http://127.0.0.1:8000").rstrip("/")
         headers = {"Authorization": f"Bearer {st.session_state.get('auth_token', '')}"}
 
-        st.subheader("Pending registrations")
-        if st.button("Refresh pending registrations", key="admin_refresh_pending"):
+        st.subheader("Registration approvals")
+        if st.button("Refresh approval queue", key="admin_refresh_pending"):
             try:
                 response = requests.get(
                     f"{api_url}/admin/pending-users", headers=headers, timeout=15
@@ -680,14 +680,14 @@ def main() -> None:
             st.info("There are no pending registrations.")
 
         st.divider()
-        st.subheader("Registered accounts")
+        st.subheader("Submit registrationed accounts")
         account_role = st.selectbox(
-            "Account type",
+            "Filter by account type",
             ["patient", "doctor", "admin"],
             format_func=lambda value: value.title(),
             key="admin_account_role",
         )
-        if st.button("Load accounts", key="admin_load_accounts"):
+        if st.button("Load users", key="admin_load_accounts"):
             try:
                 response = requests.get(
                     f"{api_url}/admin/users",
@@ -716,8 +716,8 @@ def main() -> None:
                 st.info("No accounts found for this role.")
 
         st.divider()
-        st.subheader("Patient–Doctor Assignment")
-        st.caption("Each patient can have one assigned doctor. Reassigning replaces the previous doctor.")
+        st.subheader("Care team assignments")
+        st.caption("Assign one primary doctor to each patient. A new assignment replaces the current one.")
         try:
             pr = requests.get(f"{api_url}/admin/users", params={"role": "patient"}, headers=headers, timeout=15)
             pr.raise_for_status()
@@ -736,15 +736,15 @@ def main() -> None:
             else:
                 patient_options = {f"{u['full_name']} — {u['email']} (ID {u['id']})": u for u in patients}
                 doctor_options = {f"{u['full_name']} — {u['email']} (ID {u['id']})": u["id"] for u in doctors}
-                patient_label = st.selectbox("Select patient", list(patient_options), key="admin_assignment_patient")
+                patient_label = st.selectbox("Choose a patient", list(patient_options), key="admin_assignment_patient")
                 patient = patient_options[patient_label]
                 current = assigned.get(patient["id"])
                 current_id = current.get("doctor_id") if current else None
                 current_label = next((k for k,v in doctor_options.items() if v == current_id), "Not assigned")
                 st.write(f"**Current doctor:** {current_label}")
                 default_index = next((i for i,v in enumerate(doctor_options.values()) if v == current_id), 0)
-                doctor_label = st.selectbox("Assign doctor", list(doctor_options), index=default_index, key="admin_assignment_doctor")
-                if st.button("Save assignment", type="primary", key="admin_save_assignment"):
+                doctor_label = st.selectbox("Choose a doctor", list(doctor_options), index=default_index, key="admin_assignment_doctor")
+                if st.button("Save doctor assignment", type="primary", key="admin_save_assignment"):
                     try:
                         rr = requests.put(f"{api_url}/admin/patients/{patient['id']}/assignment",
                             json={"doctor_id": doctor_options[doctor_label]}, headers=headers, timeout=15)
@@ -755,7 +755,7 @@ def main() -> None:
                         detail = getattr(getattr(exc, "response", None), "text", "") or str(exc)
                         st.error(f"Could not save assignment: {detail}")
             if assignments:
-                st.markdown("**Current assignments**")
+                st.markdown("**Assignment overview**")
                 st.dataframe(pd.DataFrame(assignments), width="stretch", hide_index=True)
             else:
                 st.info("No patient–doctor assignments have been created yet.")
@@ -766,10 +766,10 @@ def main() -> None:
 
     # Doctor dashboard: only patient-shared recordings are returned by the API.
     if user_role == "doctor":
-        st.header("Doctor Dashboard")
-        st.caption("Review ECG recordings that your assigned patients have explicitly shared.")
+        st.header("Doctor Workspace")
+        st.caption("Review ECG records that your assigned patients have chosen to share with you.")
         st.divider()
-        st.subheader("My Patients")
+        st.subheader("Assigned patients")
         try:
             patients = get_assigned_patients(st.session_state.get("auth_token", ""))
             if not patients:
@@ -777,7 +777,7 @@ def main() -> None:
             else:
                 patient_options = {f"{p.get('full_name')} — {p.get('email')}": p for p in patients}
                 selected_patient_label = st.selectbox(
-                    "Select a patient", list(patient_options), key="doctor_selected_patient"
+                    "Choose a patient", list(patient_options), key="doctor_selected_patient"
                 )
                 selected_patient = patient_options[selected_patient_label]
                 token = st.session_state.get("auth_token", "")
@@ -790,7 +790,7 @@ def main() -> None:
                 patient_recordings = [
                     r for r in doctor_recordings if r.get("patient_id") == selected_patient.get("id")
                 ]
-                st.markdown(f"**Shared ECG recordings for {selected_patient.get('full_name')}**")
+                st.markdown(f"**Shared ECG records for {selected_patient.get('full_name')}**")
                 if not patient_recordings:
                     st.info("This patient has not shared any ECG recordings with you.")
                 else:
@@ -799,13 +799,13 @@ def main() -> None:
                         for r in patient_recordings
                     }
                     selected_label = st.selectbox(
-                        "Select a shared recording", list(options), key="doctor_selected_recording"
+                        "Choose a shared ECG record", list(options), key="doctor_selected_recording"
                     )
                     selected_recording = options[selected_label]
                     recording_id = int(selected_recording["id"])
                     try:
                         detail = get_recording_predictions(token, recording_id)
-                        st.subheader("CNN heartbeat predictions")
+                        st.subheader("AI heartbeat classification results")
                         if detail:
                             pred_df = pd.DataFrame(detail)
                             st.dataframe(pred_df, width="stretch", hide_index=True)
@@ -825,7 +825,7 @@ def main() -> None:
                         else:
                             st.info("No beat-level predictions were saved for this recording.")
 
-                        st.subheader("ECG waveform")
+                        st.subheader("ECG signal waveform")
                         if selected_recording.get("has_waveform"):
                             import io
                             waveform_bytes = get_recording_waveform(token, recording_id)
@@ -853,9 +853,9 @@ def main() -> None:
                             )
 
                         st.divider()
-                        st.subheader("AI-assisted ECG review")
+                        st.subheader("AI-assisted review")
                         st.caption("Groq receives saved CNN summary metrics, not the raw waveform. This is decision support, not a diagnosis.")
-                        if st.button("Generate doctor-focused AI report", key=f"doctor_ai_generate_{recording_id}"):
+                        if st.button("Generate AI review summary", key=f"doctor_ai_generate_{recording_id}"):
                             try:
                                 if not groq_available():
                                     st.error("Groq is not configured. Add GROQ_API_KEY to Streamlit Secrets.")
@@ -879,7 +879,7 @@ def main() -> None:
                             st.warning(f"Could not load AI report history: {exc}")
 
                         st.divider()
-                        st.subheader("Clinical notes")
+                        st.subheader("Doctor's notes")
                         existing_notes = get_recording_notes(token, recording_id)
                         if existing_notes:
                             for note_item in existing_notes:
@@ -892,12 +892,12 @@ def main() -> None:
                         else:
                             st.info("No clinical notes have been written for this recording.")
                         with st.form(f"doctor_note_form_{recording_id}"):
-                            note_text = st.text_area("Write a clinical note", max_chars=10000)
+                            note_text = st.text_area("Add a clinical note", max_chars=10000)
                             patient_visible = st.checkbox(
                                 "Make this note visible to the patient", value=True,
                                 help="If unchecked, only the doctor can view this note."
                             )
-                            note_submitted = st.form_submit_button("Save clinical note", type="primary")
+                            note_submitted = st.form_submit_button("Save note", type="primary")
                         if note_submitted:
                             if not note_text.strip():
                                 st.error("Enter a note before saving.")
@@ -942,19 +942,19 @@ def main() -> None:
             st.warning("Your doctor assignment or chat could not be loaded right now.")
 
         st.divider()
-        st.subheader("Your saved ECG recordings")
+        st.subheader("My ECG records")
         patient_token = st.session_state.get("auth_token", "")
         try:
             patient_history = get_recordings(patient_token)
             if patient_history:
                 st.dataframe(pd.DataFrame(patient_history), width="stretch", hide_index=True)
-                st.subheader("Share an ECG recording with your assigned doctor")
+                st.subheader("Share an ECG record with your doctor")
                 share_choices = {
                     f"Recording #{r['id']} — {r.get('file_name') or 'ECG record'}": r['id']
                     for r in patient_history
                 }
                 chosen_label = st.selectbox(
-                    "Choose a saved recording",
+                    "Select an ECG record",
                     list(share_choices),
                     key="patient_share_recording_choice",
                 )
@@ -962,7 +962,7 @@ def main() -> None:
                 share_status = get_recording_share_status(patient_token, chosen_id)
                 if share_status.get("is_active"):
                     st.success("This recording is currently shared with your assigned doctor.")
-                    if st.button("Revoke sharing", key="revoke_ecg_share"):
+                    if st.button("Stop sharing", key="revoke_ecg_share"):
                         try:
                             revoke_recording_share(patient_token, chosen_id)
                             st.success("Sharing revoked.")
@@ -973,7 +973,7 @@ def main() -> None:
                     st.caption(
                         "Only your currently assigned doctor can access this recording after you share it."
                     )
-                    if st.button("Share with my assigned doctor", key="share_ecg_recording"):
+                    if st.button("Share with my doctor", key="share_ecg_recording"):
                         try:
                             share_recording(patient_token, chosen_id)
                             st.success("Recording shared with your assigned doctor.")
@@ -985,7 +985,7 @@ def main() -> None:
                     "You have no saved ECG recordings yet. The sharing section is available now; "
                     "save an ECG analysis to create a recording that you can share."
                 )
-                st.subheader("Share an ECG recording with your assigned doctor")
+                st.subheader("Share an ECG record with your doctor")
                 st.caption("Your saved recordings will appear here when you have uploaded and saved an ECG analysis.")
         except requests.RequestException as exc:
             detail = getattr(getattr(exc, "response", None), "text", "") or str(exc)
@@ -995,8 +995,8 @@ def main() -> None:
 
     if user_role == "patient":
         st.divider()
-        st.subheader("AI explanation of a saved ECG")
-        st.caption("A patient-friendly explanation of your saved CNN results. It is not a diagnosis and does not replace your doctor.")
+        st.subheader("AI explanation")
+        st.caption("Understand your ECG model results in plain language. This explanation is not a diagnosis and does not replace medical advice.")
         try:
             saved_for_ai = get_recordings(st.session_state.get("auth_token", ""))
             if saved_for_ai:
@@ -1004,10 +1004,10 @@ def main() -> None:
                     f"Recording #{r['id']} — {r.get('file_name') or 'ECG record'}": r
                     for r in saved_for_ai
                 }
-                ai_label = st.selectbox("Choose an ECG record for AI explanation", list(ai_choices), key="patient_ai_record")
+                ai_label = st.selectbox("Select an ECG record", list(ai_choices), key="patient_ai_record")
                 ai_record = ai_choices[ai_label]
                 ai_record_id = int(ai_record["id"])
-                if st.button("Generate patient-friendly AI explanation", key=f"patient_ai_generate_{ai_record_id}"):
+                if st.button("Generate AI explanation", key=f"patient_ai_generate_{ai_record_id}"):
                     try:
                         if not groq_available():
                             st.error("Groq is not configured. Add GROQ_API_KEY to Streamlit Secrets.")
@@ -1036,7 +1036,7 @@ def main() -> None:
             st.warning(f"Could not load your saved ECG records: {exc}")
 
     if user_role == "patient":
-        st.subheader("Clinical notes from your doctor")
+        st.subheader("Doctor's notes from your doctor")
         try:
             patient_saved = get_recordings(st.session_state.get("auth_token", ""))
             note_rows = []
@@ -1058,10 +1058,10 @@ def main() -> None:
             detail_text = getattr(getattr(exc, "response", None), "text", "") or str(exc)
             st.warning(f"Could not load clinical notes: {detail_text}")
 
-    st.title("💓 ECG Heartbeat Classification")
+    st.title("💓 ECG Analysis Workspace")
     st.write(
         f"Welcome, {user_name}. "
-        "Use the ECG analysis workspace below to review uploaded WFDB records."
+        "Upload an ECG record, review the detected heartbeats, and explore the model results."
     )
     st.warning(
         "Research/student prototype only — not clinically validated and not a medical diagnosis. "
@@ -1088,8 +1088,8 @@ def main() -> None:
         st.stop()
 
     mode = st.radio(
-        "Inference mode",
-        ["Reference Annotation Mode (evaluation)", "Automatic Detection Mode (deployment)"],
+        "Analysis mode",
+        ["Reference mode · Evaluation", "Automatic mode · Analysis"],
         horizontal=True,
     )
     if mode.startswith("Reference"):
@@ -1131,10 +1131,10 @@ def main() -> None:
             raise ValueError("No .hea file was found. Upload it with its signal file or use a ZIP bundle.")
 
         header_options = [path.relative_to(root).as_posix() for path in headers]
-        selected_name = st.selectbox("Choose ECG record", header_options)
+        selected_name = st.selectbox("Select ECG record", header_options)
         selected_header = root.joinpath(*Path(selected_name).parts)
         if st.button(
-            "Run reference evaluation" if mode.startswith("Reference") else "Analyze automatically",
+            "Run evaluation" if mode.startswith("Reference") else "Analyse ECG",
             type="primary",
         ):
             if mode.startswith("Reference"):
@@ -1159,7 +1159,7 @@ def main() -> None:
                 predictions = probabilities.argmax(axis=1)
                 matrix, report, accuracy = _classification_metrics(data["y_true"], predictions)
 
-                st.subheader("Reference annotation evaluation")
+                st.subheader("Reference evaluation results")
                 st.caption(
                     "Reference annotation symbols map as N/L/R/e/j→N, A/a/J/S→S, V/E→V, F→F, and /, f, Q→Q. "
                     "All other annotation symbols are ignored. The CNN output classes, in index order, are N, S, V, F, Q."
@@ -1177,7 +1177,7 @@ def main() -> None:
                 class_counts = pd.Series(
                     [CLASS_NAMES[int(i)] for i in predictions]
                 ).value_counts().reindex(list(CLASS_NAMES.values()), fill_value=0)
-                st.subheader("Predicted class distribution")
+                st.subheader("Heartbeat classification overview")
                 st.plotly_chart(
                     px.bar(
                         pd.DataFrame({"Class": class_counts.index, "Beats": class_counts.values}),
@@ -1185,14 +1185,14 @@ def main() -> None:
                     ),
                     width="stretch",
                 )
-                st.subheader("Confusion matrix")
+                st.subheader("Model confusion matrix")
                 st.caption("Rows are reference labels; columns are CNN predictions.")
                 st.dataframe(
                     pd.DataFrame(matrix, index=list(CLASS_NAMES.values()), columns=list(CLASS_NAMES.values()))
                     .rename_axis("Reference"),
                     width="stretch",
                 )
-                st.subheader("Classification report")
+                st.subheader("Classification performance report")
                 st.dataframe(report, width="stretch", hide_index=True)
                 results = pd.DataFrame({
                     "Beat": np.arange(1, len(predictions) + 1),
@@ -1220,7 +1220,7 @@ def main() -> None:
                 if not np.isfinite(probabilities).all():
                     raise ValueError("The CNN returned NaN or infinite prediction values.")
                 predictions = probabilities.argmax(axis=1)
-                st.subheader("Automatic detection results")
+                st.subheader("Automatic analysis results")
                 if data["detector"] != "WFDB XQRS":
                     st.warning(
                         f"{data['diagnostic']} The app used the documented approximate SciPy fallback "
@@ -1235,7 +1235,7 @@ def main() -> None:
                 class_counts = pd.Series(
                     [CLASS_NAMES[int(i)] for i in predictions]
                 ).value_counts().reindex(list(CLASS_NAMES.values()), fill_value=0)
-                st.subheader("Predicted class distribution")
+                st.subheader("Heartbeat classification overview")
                 st.plotly_chart(
                     px.bar(
                         pd.DataFrame({"Class": class_counts.index, "Beats": class_counts.values}),
@@ -1275,17 +1275,17 @@ def main() -> None:
                 sampling_rate = TRAINING_FS
                 csv_stem = selected_header.stem
 
-            st.subheader(f"ECG waveform — {lead_name}")
+            st.subheader(f"ECG signal waveform — {lead_name}")
             plot_limit = min(len(signal), int(sampling_rate * 30))
             signal_frame = pd.DataFrame({
                 "Time (s)": np.arange(plot_limit) / sampling_rate,
                 "Amplitude": signal[:plot_limit],
             })
             st.plotly_chart(px.line(signal_frame, x="Time (s)", y="Amplitude"), width="stretch")
-            st.subheader("Per-beat results")
+            st.subheader("Heartbeat-by-heartbeat results")
             st.dataframe(results, width="stretch", hide_index=True)
             st.download_button(
-                "Download predictions (CSV)",
+                "Download heartbeat results (CSV)",
                 results.to_csv(index=False).encode("utf-8"),
                 file_name=f"{csv_stem}_{'reference' if mode.startswith('Reference') else 'automatic'}_predictions.csv",
                 mime="text/csv",
@@ -1341,23 +1341,23 @@ def main() -> None:
 
         if st.session_state.get("ecg_llm_payload"):
             st.divider()
-            st.header("Groq ECG Analysis (Research Prototype)")
-            st.caption("Healthcare support summary: dominant model finding, possible concerns to verify, and practical next steps for doctors or nurses. Groq receives summary metrics and model outputs, not the raw ECG waveform or full beat table.")
+            st.header("AI-generated ECG summary")
+            st.caption("Healthcare support summary: dominant model finding, possible concerns to verify, and practical next steps for doctors or nurses. Groq receives summary metrics and model outputs, not the raw ECG signal waveform or full beat table.")
             if not groq_available():
                 st.info("To enable Groq, add GROQ_API_KEY to Streamlit Secrets. See GROQ_SETUP.md for setup.")
             payload = st.session_state["ecg_llm_payload"]
-            if st.button("Generate English analysis report", type="primary", key="groq_report"):
+            if st.button("Generate AI summary", type="primary", key="groq_report"):
                 with st.spinner("Generating report with Groq…"):
                     try:
                         st.session_state["ecg_llm_report"] = ask_groq(
                             payload,
-                            "Write an English ECG results interpretation and care-support summary for a doctor or nurse. Use sections: 1) Main Finding (state which predicted class is most common, with count and percentage), 2) Other Notable Model Outputs, 3) Potential Clinical Concerns to Verify (explain cautiously what the labels may warrant checking, without presenting them as confirmed abnormalities), 4) Practical Suggestions for the Healthcare User (review relevant waveform segments, correlate with symptoms/history and existing clinical observations, check signal/peak quality, and escalate according to established clinical protocols if the patient has concerning symptoms), and 5) Limitations. Base every statement on supplied metrics. Explain that model predictions alone cannot establish a patient-specific threat or diagnosis; the raw ECG waveform and patient context were not supplied to the LLM. If non-N classes or low-confidence beats are present, recommend checking those segments. If no reference annotations are available, state that correctness is unknown. Do not prescribe treatment or invent clinical findings. Do not provide a false sense of reassurance from a high mean confidence score.",
+                            "Write an English ECG results interpretation and care-support summary for a doctor or nurse. Use sections: 1) Main Finding (state which predicted class is most common, with count and percentage), 2) Other Notable Model Outputs, 3) Potential Clinical Concerns to Verify (explain cautiously what the labels may warrant checking, without presenting them as confirmed abnormalities), 4) Practical Suggestions for the Healthcare User (review relevant waveform segments, correlate with symptoms/history and existing clinical observations, check signal/peak quality, and escalate according to established clinical protocols if the patient has concerning symptoms), and 5) Limitations. Base every statement on supplied metrics. Explain that model predictions alone cannot establish a patient-specific threat or diagnosis; the raw ECG signal waveform and patient context were not supplied to the LLM. If non-N classes or low-confidence beats are present, recommend checking those segments. If no reference annotations are available, state that correctness is unknown. Do not prescribe treatment or invent clinical findings. Do not provide a false sense of reassurance from a high mean confidence score.",
                         )
                     except Exception as exc:
                         st.error(f"Groq request failed: {exc}")
             if st.session_state.get("ecg_llm_report"):
                 st.markdown(st.session_state["ecg_llm_report"])
-                st.download_button("Download Groq report (.md)", st.session_state["ecg_llm_report"], file_name="ecg_groq_analysis_report.md", mime="text/markdown")
+                st.download_button("Download AI summary (.md)", st.session_state["ecg_llm_report"], file_name="ecg_groq_analysis_report.md", mime="text/markdown")
     except Exception as exc:
         st.error(str(exc))
 
@@ -1365,12 +1365,12 @@ def main() -> None:
     analysis_to_save = st.session_state.get("last_ecg_analysis")
     if analysis_to_save and user_role == "patient":
         st.divider()
-        st.subheader("Save ECG analysis to patient history")
+        st.subheader("Save results to my ECG history")
         st.caption(
             "This saves recording metadata and beat-level CNN predictions to PostgreSQL. "
-            "The original raw ECG waveform file is not uploaded by this operation."
+            "The original raw ECG signal waveform file is not uploaded by this operation."
         )
-        if st.button("Save this analysis to my history", type="primary", key="save_ecg_analysis"):
+        if st.button("Save ECG results", type="primary", key="save_ecg_analysis"):
             try:
                 with st.spinner("Saving ECG results to the database…"):
                     saved = save_recording(
@@ -1399,8 +1399,8 @@ def main() -> None:
 
     # Recording history is available to patients and doctors, subject to backend access rules.
     st.divider()
-    st.subheader("Saved ECG recording history")
-    if st.button("Refresh recording history", key="refresh_recording_history"):
+    st.subheader("ECG history")
+    if st.button("Refresh ECG history", key="refresh_recording_history"):
         try:
             history = get_recordings(st.session_state.get("auth_token", ""))
             st.session_state["recording_history"] = history
