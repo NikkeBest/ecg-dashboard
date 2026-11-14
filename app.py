@@ -574,6 +574,18 @@ def _render_patient_doctor_chat(token: str, patient_id: int, recording_options: 
 def main() -> None:
     st.set_page_config(page_title="ECG Heartbeat Monitoring", page_icon="💓", layout="wide")
 
+    # Apply the requested font only; keep the existing layout and styling unchanged.
+    st.markdown(
+        """
+        <style>
+        html, body, [class*="st-"], [class*="css"], button, input, textarea, select {
+            font-family: "Times New Roman", Times, serif !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     user = st.session_state.get("auth_user")
     if not user:
         _auth_screen()
