@@ -990,15 +990,27 @@ def main() -> None:
             if patient_history:
                 history_frame = pd.DataFrame(patient_history)
 
-                styled_history = history_frame.style.hide(axis="index").set_table_styles([
-                {
-                    "selector": "th, td",
-                    "props": [
-                        ("font-family", "Times New Roman, Times, serif"),
-                    ],
-                }
-                ])
-                st.table(styled_history)
+                history_html = history_frame.to_html(index=False, escape=True, border=0, classes="ecg-history-table")
+                st.markdown(
+                    """
+                    <style>
+                    .ecg-history-table {
+                        width: 100%;
+                        border-collapse: collapse;
+                        font-family: "Times New Roman", Times, serif !important;
+                    }
+                    .ecg-history-table th,
+                    .ecg-history-table td {
+                        font-family: "Times New Roman", Times, serif !important;
+                        padding: 8px;
+                        border: 1px solid rgba(128, 128, 128, 0.25);
+                        text-align: left;
+                    }
+                    </style>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                st.markdown(history_html, unsafe_allow_html=True)
                 st.subheader("Share an ECG recording with your assigned doctor")
                 share_choices = {
                     f"Recording #{r['id']} — {r.get('file_name') or 'ECG record'}": r['id']
@@ -1463,15 +1475,27 @@ def main() -> None:
         history = st.session_state["recording_history"]
         if history:
             history_frame = pd.DataFrame(history)
-            styled_history = history_frame.style.hide(axis="index").set_table_styles([
-                {
-                    "selector": "th, td",
-                    "props": [
-                        ("font-family", "Times New Roman, Times, serif"),
-                    ],
+            history_html = history_frame.to_html(index=False, escape=True, border=0, classes="ecg-history-table")
+            st.markdown(
+                """
+                <style>
+                .ecg-history-table {
+                    width: 100%;
+                    border-collapse: collapse;
+                    font-family: "Times New Roman", Times, serif !important;
                 }
-            ])
-            st.table(styled_history)
+                .ecg-history-table th,
+                .ecg-history-table td {
+                    font-family: "Times New Roman", Times, serif !important;
+                    padding: 8px;
+                    border: 1px solid rgba(128, 128, 128, 0.25);
+                    text-align: left;
+                }
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.markdown(history_html, unsafe_allow_html=True)
         else:
             st.info("No saved ECG recordings were found for this account.")
 
