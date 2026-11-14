@@ -3,8 +3,15 @@ import os
 from typing import Any, Optional
 
 import requests
+import streamlit as st
 
-API_URL = os.getenv("API_URL", "http://127.0.0.1:8000").rstrip("/")
+try:
+    API_URL = str(st.secrets["API_URL"]).rstrip("/")
+except Exception:
+    API_URL = os.getenv(
+        "API_URL",
+        "http://127.0.0.1:8000"
+    ).rstrip("/")
 TIMEOUT_SECONDS = 30
 
 
