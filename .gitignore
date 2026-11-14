@@ -1,14 +1,29 @@
-.vscode/
-venv/
-.venv/
-__pycache__/
-*.pyc
+# Secrets
 .env
 .env.*
 !.env.example
-backend/venv/
 backend/.env
-node_modules/
-frontend/node_modules/
-frontend/dist/
+
+# Virtual environments
+.venv/
+venv/
+backend/venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Local ECG and patient data
+backend/ecg_waveforms/
+ecg_waveforms/
+uploads/
+patient_data/
+
+# Editor settings (optional)
+.vscode/
+
+# Streamlit secrets
 .streamlit/secrets.toml
+
+# VS Code settings
+.vscode/
