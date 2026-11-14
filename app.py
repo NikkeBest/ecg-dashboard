@@ -1463,7 +1463,7 @@ def main() -> None:
         history = st.session_state["recording_history"]
         if history:
             history_frame = pd.DataFrame(history)
-            styled_history = history_frame.style.set_table_styles([
+            styled_history = history_frame.style.hide(axis="index").set_table_styles([
                 {
                     "selector": "th, td",
                     "props": [
