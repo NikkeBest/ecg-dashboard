@@ -990,7 +990,7 @@ def main() -> None:
             if patient_history:
                 history_frame = pd.DataFrame(patient_history)
 
-                styled_history = history_frame.style.set_table_styles([
+                styled_history = history_frame.style.hide(axis="index").set_table_styles([
                 {
                     "selector": "th, td",
                     "props": [
