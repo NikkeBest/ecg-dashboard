@@ -1071,29 +1071,6 @@ def main() -> None:
             if not np.isfinite(probabilities).all():
                 raise ValueError("The CNN returned NaN or infinite prediction values.")
             predictions = probabilities.argmax(axis=1)
-            st.subheader("Automatic detection results")
-            if data["detector"] != "WFDB XQRS":
-                st.warning(
-                    f"{data['diagnostic']} The app used the documented approximate SciPy fallback "
-                    f"(5–{min(20.0, TRAINING_FS * 0.45):g} Hz band-pass, absolute-signal local maxima, "
-                    "250 ms minimum spacing). Secondary waveform peaks can be counted; review detections."
-                )
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Detector", data["detector"])
-            c2.metric("Detected peaks", f"{data['detected_count']:,}")
-            c3.metric("Valid 187-sample windows", f"{data['valid_count']:,}")
-            c4.metric("Excluded: incomplete window", f"{data['excluded']:,}")
-            class_counts = pd.Series(
-                [CLASS_NAMES[int(i)] for i in predictions]
-            ).value_counts().reindex(list(CLASS_NAMES.values()), fill_value=0)
-            st.subheader("Predicted class distribution")
-            st.plotly_chart(
-                px.bar(
-                    pd.DataFrame({"Class": class_counts.index, "Beats": class_counts.values}),
-                    x="Class", y="Beats", color="Class",
-                ),
-                width="stretch",
-            )
             results = pd.DataFrame({
                 "Beat": np.arange(1, len(predictions) + 1),
                 "Time (s)": data["valid_peaks"] / TRAINING_FS,
@@ -1104,22 +1081,6 @@ def main() -> None:
             lead_name = data["lead_name"]
             sampling_rate = TRAINING_FS
             csv_stem = selected_header.stem
-
-            st.subheader(f"ECG waveform — {lead_name}")
-            plot_limit = min(len(signal), int(sampling_rate * 30))
-            signal_frame = pd.DataFrame({
-                "Time (s)": np.arange(plot_limit) / sampling_rate,
-                "Amplitude": signal[:plot_limit],
-            })
-            st.plotly_chart(px.line(signal_frame, x="Time (s)", y="Amplitude"), width="stretch")
-            st.subheader("Per-beat results")
-            st.dataframe(results, width="stretch", hide_index=True)
-            st.download_button(
-                "Download predictions (CSV)",
-                results.to_csv(index=False).encode("utf-8"),
-                file_name=f"{csv_stem}_predictions.csv",
-                mime="text/csv",
-            )
 
             # Keep the completed analysis across Streamlit reruns so the user
             # can explicitly save it to the backend afterward.
@@ -1138,6 +1099,17 @@ def main() -> None:
                 "mode": "automatic_detection",
                 "waveform": np.asarray(signal, dtype=np.float32).copy(),
                 "lead_name": str(lead_name),
+                # Keep everything needed to redraw the results after any Streamlit rerun.
+                "results": results.to_dict("records"),
+                "detector": str(data["detector"]),
+                "detector_diagnostic": str(data.get("diagnostic") or ""),
+                "detected_count": int(data["detected_count"]),
+                "valid_count": int(data["valid_count"]),
+                "excluded": int(data["excluded"]),
+                "class_counts": {
+                    name: int((predictions == idx).sum())
+                    for idx, name in CLASS_NAMES.items()
+                },
             }
             counts = {name: int((predictions == idx).sum()) for idx, name in CLASS_NAMES.items()}
             confidence = np.asarray(probabilities).max(axis=1)
@@ -1166,6 +1138,63 @@ def main() -> None:
             st.session_state["ecg_llm_payload"] = llm_payload
             st.session_state["ecg_llm_chat"] = []
             st.session_state.pop("ecg_llm_report", None)
+
+        # Render the most recent CNN results on every rerun, including after
+        # the user clicks the separate Groq report button.
+        saved_analysis = st.session_state.get("last_ecg_analysis")
+        if saved_analysis and saved_analysis.get("results"):
+            st.divider()
+            st.subheader("Automatic detection results")
+            if saved_analysis.get("detector") != "WFDB XQRS":
+                st.warning(
+                    f"{saved_analysis.get('detector_diagnostic') or 'WFDB XQRS was unavailable.'} "
+                    "The app used the approximate SciPy fallback. Secondary waveform peaks can be "
+                    "counted; review detections."
+                )
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Detector", saved_analysis.get("detector", "Unknown"))
+            c2.metric("Detected peaks", f"{saved_analysis.get('detected_count', 0):,}")
+            c3.metric("Valid 187-sample windows", f"{saved_analysis.get('valid_count', 0):,}")
+            c4.metric("Excluded: incomplete window", f"{saved_analysis.get('excluded', 0):,}")
+
+            saved_counts = saved_analysis.get("class_counts", {})
+            class_names = list(CLASS_NAMES.values())
+            class_counts = pd.Series(
+                {name: int(saved_counts.get(name, 0)) for name in class_names}
+            )
+            st.subheader("Predicted class distribution")
+            st.plotly_chart(
+                px.bar(
+                    pd.DataFrame({"Class": class_counts.index, "Beats": class_counts.values}),
+                    x="Class", y="Beats", color="Class",
+                ),
+                width="stretch",
+            )
+
+            st.subheader(f"ECG waveform — {saved_analysis.get('lead_name', 'ECG')}")
+            saved_signal = np.asarray(saved_analysis.get("waveform", []), dtype=float)
+            saved_fs = int(saved_analysis.get("sampling_rate", TRAINING_FS))
+            plot_limit = min(len(saved_signal), int(saved_fs * 30))
+            signal_frame = pd.DataFrame({
+                "Time (s)": np.arange(plot_limit) / saved_fs,
+                "Amplitude": saved_signal[:plot_limit],
+            })
+            if not signal_frame.empty:
+                st.plotly_chart(
+                    px.line(signal_frame, x="Time (s)", y="Amplitude"),
+                    width="stretch",
+                )
+
+            st.subheader("Per-beat results")
+            saved_results = pd.DataFrame(saved_analysis["results"])
+            st.dataframe(saved_results, width="stretch", hide_index=True)
+            st.download_button(
+                "Download predictions (CSV)",
+                saved_results.to_csv(index=False).encode("utf-8"),
+                file_name=f"{saved_analysis.get('file_name', 'ecg')}_predictions.csv",
+                mime="text/csv",
+                key="download_saved_ecg_predictions",
+            )
 
         if st.session_state.get("ecg_llm_payload"):
             st.divider()
