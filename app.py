@@ -989,6 +989,9 @@ def main() -> None:
             patient_history = get_recordings(patient_token)
             if patient_history:
                 history_frame = pd.DataFrame(patient_history)
+                if "created_at" in history_frame.columns:
+                    created = pd.to_datetime(history_frame["created_at"], errors="coerce", utc=True)
+                    history_frame["created_at"] = created.dt.strftime("%d %b %Y, %I:%M %p UTC").fillna("")
 
                 history_html = history_frame.to_html(index=False, escape=True, border=0, classes="ecg-history-table")
                 st.markdown(
@@ -1475,6 +1478,9 @@ def main() -> None:
         history = st.session_state["recording_history"]
         if history:
             history_frame = pd.DataFrame(history)
+            if "created_at" in history_frame.columns:
+                created = pd.to_datetime(history_frame["created_at"], errors="coerce", utc=True)
+                history_frame["created_at"] = created.dt.strftime("%d %b %Y, %I:%M %p UTC").fillna("")
             history_html = history_frame.to_html(index=False, escape=True, border=0, classes="ecg-history-table")
             st.markdown(
                 """
