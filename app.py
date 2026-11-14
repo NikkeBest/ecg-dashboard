@@ -482,7 +482,7 @@ def _get_user_from_login(result: dict) -> dict:
 def _auth_screen() -> None:
     st.title("💓 ECG Monitoring Platform")
     st.caption("Sign in to manage ECG records, AI insights, and care-team communication.")
-    login_tab, register_tab = st.tabs(["Sign in", "Submit registration"])
+    login_tab, register_tab = st.tabs(["Sign in", "Create account"])
 
     with login_tab:
         with st.form("login_form"):
@@ -518,8 +518,8 @@ def _auth_screen() -> None:
             full_name = st.text_input("Full name", key="auth_register_name")
             new_email = st.text_input("Email", key="auth_register_email")
             new_password = st.text_input("Password (at least 8 characters)", type="password", key="auth_register_password")
-            role = st.selectbox("Submit registration as", ["patient", "doctor"], key="auth_register_role")
-            submitted = st.form_submit_button("Submit registration")
+            role = st.selectbox("Account type", ["patient", "doctor"], key="auth_register_role")
+            submitted = st.form_submit_button("Create account")
         if submitted:
             if not full_name.strip() or not new_email.strip() or not new_password:
                 st.error("Complete all registration fields.")
@@ -680,7 +680,7 @@ def main() -> None:
             st.info("There are no pending registrations.")
 
         st.divider()
-        st.subheader("Submit registrationed accounts")
+        st.subheader("User directory")
         account_role = st.selectbox(
             "Filter by account type",
             ["patient", "doctor", "admin"],
@@ -1036,7 +1036,7 @@ def main() -> None:
             st.warning(f"Could not load your saved ECG records: {exc}")
 
     if user_role == "patient":
-        st.subheader("Doctor's notes from your doctor")
+        st.subheader("Notes from your doctor")
         try:
             patient_saved = get_recordings(st.session_state.get("auth_token", ""))
             note_rows = []
