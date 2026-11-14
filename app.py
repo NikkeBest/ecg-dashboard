@@ -988,7 +988,17 @@ def main() -> None:
         try:
             patient_history = get_recordings(patient_token)
             if patient_history:
-                st.dataframe(pd.DataFrame(patient_history), width="stretch", hide_index=True)
+                history_frame = pd.DataFrame(history)
+
+                styled_history = history_frame.style.set_table_styles([
+                {
+                    "selector": "th, td",
+                    "props": [
+                        ("font-family", "Times New Roman, Times, serif"),
+                    ],
+                }
+                ])
+                st.table(styled_history)
                 st.subheader("Share an ECG recording with your assigned doctor")
                 share_choices = {
                     f"Recording #{r['id']} — {r.get('file_name') or 'ECG record'}": r['id']
