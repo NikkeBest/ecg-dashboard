@@ -582,7 +582,12 @@ def main() -> None:
     st.markdown(
         """
         <style>
-        html, body, [class*="st-"], [class*="css"], button, input, textarea, select {
+        html, body, [class*="st-"], [class*="css"], button, input, textarea, select,
+        h1, h2, h3, h4, h5, h6,
+        [data-testid="stHeading"], [data-testid="stHeading"] *,
+        [data-testid="stMarkdown"], [data-testid="stMarkdown"] *,
+        [data-testid="stChatMessage"], [data-testid="stChatMessage"] *,
+        [data-testid="stWidgetLabel"], [data-testid="stWidgetLabel"] * {
             font-family: "Times New Roman", Times, serif !important;
         }
         </style>
