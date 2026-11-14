@@ -1463,7 +1463,15 @@ def main() -> None:
         history = st.session_state["recording_history"]
         if history:
             history_frame = pd.DataFrame(history)
-            st.dataframe(history_frame, width="stretch", hide_index=True)
+            styled_history = history_frame.style.set_table_styles([
+                {
+                    "selector": "th, td",
+                    "props": [
+                        ("font-family", "Times New Roman, Times, serif"),
+                    ],
+                }
+            ])
+            st.table(styled_history)
         else:
             st.info("No saved ECG recordings were found for this account.")
 
