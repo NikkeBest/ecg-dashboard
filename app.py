@@ -590,6 +590,26 @@ def main() -> None:
         [data-testid="stWidgetLabel"], [data-testid="stWidgetLabel"] * {
             font-family: "Times New Roman", Times, serif !important;
         }
+        /* Keep Streamlit Material icons using their icon font, not Times New Roman. */
+        .material-symbols-rounded,
+        .material-symbols-outlined,
+        .material-icons,
+        [data-testid="stIconMaterial"],
+        [data-testid="stIconMaterial"] * {
+            font-family: "Material Symbols Rounded" !important;
+            font-weight: normal !important;
+            font-style: normal !important;
+            font-size: 24px;
+            line-height: 1;
+            letter-spacing: normal;
+            text-transform: none;
+            display: inline-block;
+            white-space: nowrap;
+            word-wrap: normal;
+            direction: ltr;
+            -webkit-font-feature-settings: "liga";
+            -webkit-font-smoothing: antialiased;
+        }
         </style>
         """,
         unsafe_allow_html=True,
