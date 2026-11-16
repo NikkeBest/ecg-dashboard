@@ -533,6 +533,13 @@ def main() -> None:
             font-weight: 700;
             padding: .45rem 1rem;
         }
+        /* Force button labels and nested text/icons to remain white. */
+        .stButton > button *,
+        .stDownloadButton > button *,
+        [data-testid="stFormSubmitButton"] button *,
+        [data-testid="stSidebar"] [data-testid="stButton"] button * {
+            color: #ffffff !important;
+        }
         .stButton > button:hover, .stDownloadButton > button:hover,
         [data-testid="stFormSubmitButton"] button:hover {
             background: var(--ecg-teal-dark);
