@@ -449,10 +449,18 @@ def _render_patient_doctor_chat(token: str, patient_id: int, recording_options: 
 def main() -> None:
     st.set_page_config(page_title="ECG Heartbeat Monitoring", page_icon="💓", layout="wide")
 
-    # Apply the requested font only; keep the existing layout and styling unchanged.
+    # Clinical dashboard theme inspired by the supplied reference.
     st.markdown(
         """
         <style>
+        :root {
+            --ecg-teal: #0b5968;
+            --ecg-teal-dark: #073d4b;
+            --ecg-aqua: #39c2c5;
+            --ecg-bg: #f3f8f9;
+            --ecg-border: #dce9eb;
+            --ecg-ink: #18333b;
+        }
         html, body, [class*="st-"], [class*="css"], button, input, textarea, select,
         h1, h2, h3, h4, h5, h6,
         [data-testid="stHeading"], [data-testid="stHeading"] *,
@@ -460,13 +468,11 @@ def main() -> None:
         [data-testid="stChatMessage"], [data-testid="stChatMessage"] *,
         [data-testid="stWidgetLabel"], [data-testid="stWidgetLabel"] * {
             font-family: "Times New Roman", Times, serif !important;
+            color: var(--ecg-ink);
         }
-        /* Keep Streamlit Material icons using their icon font, not Times New Roman. */
-        .material-symbols-rounded,
-        .material-symbols-outlined,
-        .material-icons,
-        [data-testid="stIconMaterial"],
-        [data-testid="stIconMaterial"] * {
+        /* Preserve Streamlit's icon font. */
+        .material-symbols-rounded, .material-symbols-outlined, .material-icons,
+        [data-testid="stIconMaterial"], [data-testid="stIconMaterial"] * {
             font-family: "Material Symbols Rounded" !important;
             font-weight: normal !important;
             font-style: normal !important;
@@ -476,11 +482,80 @@ def main() -> None:
             text-transform: none;
             display: inline-block;
             white-space: nowrap;
-            word-wrap: normal;
             direction: ltr;
             -webkit-font-feature-settings: "liga";
             -webkit-font-smoothing: antialiased;
         }
+        .stApp { background: var(--ecg-bg); }
+        [data-testid="stHeader"] { background: rgba(243,248,249,.92); }
+        [data-testid="stSidebar"] {
+            background: linear-gradient(180deg, var(--ecg-teal-dark), #07576a);
+            border-right: 1px solid #0c6573;
+        }
+        [data-testid="stSidebar"] * { color: #f3ffff !important; }
+        [data-testid="stSidebar"] [data-testid="stButton"] button {
+            background: rgba(255,255,255,.10);
+            border: 1px solid rgba(255,255,255,.16);
+            border-radius: 10px;
+        }
+        [data-testid="stSidebar"] [data-testid="stButton"] button:hover {
+            background: rgba(57,194,197,.24);
+            border-color: var(--ecg-aqua);
+        }
+        .block-container { padding-top: 1.8rem; padding-bottom: 3rem; max-width: 1500px; }
+        h1 { color: var(--ecg-teal-dark) !important; font-weight: 700 !important; }
+        h2, h3 { color: var(--ecg-teal) !important; font-weight: 700 !important; }
+        [data-testid="stMetric"] {
+            background: #ffffff;
+            border: 1px solid var(--ecg-border);
+            border-radius: 14px;
+            padding: 14px 16px;
+            box-shadow: 0 3px 12px rgba(9,67,78,.05);
+        }
+        [data-testid="stMetricLabel"] { color: #58727a !important; }
+        [data-testid="stMetricValue"] { color: var(--ecg-teal-dark) !important; }
+        [data-testid="stVerticalBlockBorderWrapper"] {
+            background: #ffffff;
+            border: 1px solid var(--ecg-border);
+            border-radius: 14px;
+            box-shadow: 0 3px 12px rgba(9,67,78,.04);
+        }
+        [data-testid="stTabs"] [role="tab"] { color: var(--ecg-teal) !important; }
+        [data-testid="stTabs"] [aria-selected="true"] {
+            border-bottom-color: var(--ecg-aqua) !important;
+            color: var(--ecg-teal-dark) !important;
+        }
+        .stButton > button, .stDownloadButton > button, [data-testid="stFormSubmitButton"] button {
+            background: var(--ecg-teal);
+            color: #ffffff !important;
+            border: 1px solid var(--ecg-teal);
+            border-radius: 10px;
+            font-weight: 700;
+            padding: .45rem 1rem;
+        }
+        .stButton > button:hover, .stDownloadButton > button:hover,
+        [data-testid="stFormSubmitButton"] button:hover {
+            background: var(--ecg-teal-dark);
+            border-color: var(--ecg-teal-dark);
+            color: #ffffff !important;
+        }
+        input, textarea, [data-baseweb="select"] > div {
+            border-radius: 9px !important;
+            border-color: var(--ecg-border) !important;
+        }
+        [data-testid="stDataFrame"], [data-testid="stPlotlyChart"] {
+            background: #ffffff;
+            border: 1px solid var(--ecg-border);
+            border-radius: 13px;
+            padding: 6px;
+        }
+        hr { border-color: var(--ecg-border); }
+        /* Keep the ECG history table aligned with the dashboard theme. */
+        .ecg-history-table { width:100%; border-collapse:collapse; background:#fff; }
+        .ecg-history-table th, .ecg-history-table td {
+            padding:9px; border:1px solid var(--ecg-border); text-align:left;
+        }
+        .ecg-history-table th { color:var(--ecg-teal-dark); background:#eaf5f6; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -494,7 +569,8 @@ def main() -> None:
     user_name = user.get("full_name") or user.get("email") or "User"
     user_role = str(user.get("role", "unknown")).lower()
     with st.sidebar:
-        st.title("Account")
+        st.title("💓 ECG MONITOR")
+        st.caption("Clinical monitoring workspace")
         st.write(f"**{user_name}**")
         st.caption(f"Role: {user_role.title()}")
         if st.button("Log out", key="auth_logout"):
